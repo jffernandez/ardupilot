@@ -67,21 +67,21 @@ const AP_Param::GroupInfo AP_MotorsSingle::var_info[] PROGMEM = {
     AP_GROUPINFO("REV_ROLL", 6, AP_MotorsSingle, _rev_roll, AP_MOTORS_SING_POSITIVE),
 
     // @Param: REV_PITCH
-    // @DisplayName: Reverse roll feedback 
+    // @DisplayName: Reverse pitch feedback 
     // @Description: Ensure the feedback is negative
     // @Values: -1:Opposite direction,1:Same direction
     AP_GROUPINFO("REV_PITCH", 7, AP_MotorsSingle, _rev_pitch, AP_MOTORS_SING_POSITIVE),
 
-	// @Param: REV_ROLL
-    // @DisplayName: Reverse roll feedback 
+	// @Param: REV_YAW
+    // @DisplayName: Reverse yaw feedback 
     // @Description: Ensure the feedback is negative
     // @Values: -1:Opposite direction,1:Same direction
     AP_GROUPINFO("REV_YAW", 8, AP_MotorsSingle, _rev_yaw, AP_MOTORS_SING_POSITIVE),
 
 	// @Param: SV_SPEED
     // @DisplayName: Servo speed 
-    // @Description: Servo update speed
-    // @Values: -1:Opposite direction,1:Same direction
+    // @Description: Servo update speed in hz
+    // @Values: 50, 125, 250
     AP_GROUPINFO("SV_SPEED", 9, AP_MotorsSingle, _servo_speed, AP_MOTORS_SINGLE_SPEED_DIGITAL_SERVOS),
 
     AP_GROUPEND
@@ -151,6 +151,14 @@ void AP_MotorsSingle::output_min()
     hal.rcout->write(pgm_read_byte(&_motor_to_channel_map[AP_MOTORS_MOT_7]), _rc_throttle.radio_min);
 }
 
+// get_motor_mask - returns a bitmask of which outputs are being used for motors or servos (1 means being used)
+//  this can be used to ensure other pwm outputs (i.e. for servos) do not conflict
+uint16_t AP_MotorsSingle::get_motor_mask()
+{
+    // single copter uses channels 1,2,3,4 and 7
+    return (1U << 0 | 1U << 1 | 1U << 2 | 1U << 3 | 1U << 6);
+}
+
 // output_armed - sends commands to the motors
 void AP_MotorsSingle::output_armed()
 {
@@ -158,7 +166,14 @@ void AP_MotorsSingle::output_armed()
     int16_t motor_out;  // main motor output
 
     // Throttle is 0 to 1000 only
-    _rc_throttle.servo_out = constrain_int16(_rc_throttle.servo_out, 0, _max_throttle);
+    if (_rc_throttle.servo_out <= 0) {
+            _rc_throttle.servo_out = 0;
+            limit.throttle_lower = true;
+        }
+    if (_rc_throttle.servo_out >= _max_throttle) {
+        _rc_throttle.servo_out = _max_throttle;
+        limit.throttle_upper = true;
+    }
 
     // capture desired throttle from receiver
     _rc_throttle.calc_pwm();
@@ -172,9 +187,15 @@ void AP_MotorsSingle::output_armed()
         if (_spin_when_armed > _min_throttle) {
             _spin_when_armed = _min_throttle;
         }
-        
+
+        // throttle is limited
         motor_out = _rc_throttle.radio_min + _spin_when_armed;
     }else{
+        // check if throttle is at or below limit
+        if (_rc_throttle.servo_out <= _min_throttle) {
+            limit.throttle_lower = true;
+        }
+
 		//motor
         motor_out = _rc_throttle.radio_out;
 

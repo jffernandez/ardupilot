@@ -65,7 +65,7 @@ uint16_t SITL_State::current_pin_value;
 float SITL_State::_current;
 
 AP_Baro_HIL *SITL_State::_barometer;
-AP_InertialSensor_HIL *SITL_State::_ins;
+AP_InertialSensor *SITL_State::_ins;
 SITLScheduler *SITL_State::_scheduler;
 AP_Compass_HIL *SITL_State::_compass;
 
@@ -79,8 +79,8 @@ bool SITL_State::new_rc_input;
 // catch floating point exceptions
 void SITL_State::_sig_fpe(int signum)
 {
-	fprintf(stderr, "ERROR: Floating point exception\n");
-	exit(1);
+	fprintf(stderr, "ERROR: Floating point exception - aborting\n");
+    abort();
 }
 
 void SITL_State::_usage(void)
@@ -204,25 +204,30 @@ void SITL_State::_sitl_setup(void)
 	inet_pton(AF_INET, "127.0.0.1", &_rcout_addr.sin_addr);
 
 	_setup_timer();
+#ifndef HIL_MODE
 	_setup_fdm();
+#endif
 	fprintf(stdout, "Starting SITL input\n");
 
 	// find the barometer object if it exists
 	_sitl = (SITL *)AP_Param::find_object("SIM_");
 	_barometer = (AP_Baro_HIL *)AP_Param::find_object("GND_");
-	_ins = (AP_InertialSensor_HIL *)AP_Param::find_object("INS_");
+	_ins = (AP_InertialSensor *)AP_Param::find_object("INS_");
 	_compass = (AP_Compass_HIL *)AP_Param::find_object("COMPASS_");
 
     if (_sitl != NULL) {
         // setup some initial values
+#ifndef HIL_MODE
         _update_barometer(_initial_height);
         _update_ins(0, 0, 0, 0, 0, 0, 0, 0, -9.8, 0, _initial_height);
         _update_compass(0, 0, 0);
         _update_gps(0, 0, 0, 0, 0, 0, false);
+#endif
     }
 }
 
 
+#ifndef HIL_MODE
 /*
   setup a SITL FDM listening UDP port
  */
@@ -257,6 +262,7 @@ void SITL_State::_setup_fdm(void)
 
 	AVR_SITL::SITLUARTDriver::_set_nonblocking(_sitl_fd);
 }
+#endif
 
 
 /*
@@ -301,15 +307,19 @@ void SITL_State::_timer_handler(int signum)
         new_rc_input = true;
     }
 
+#ifndef HIL_MODE
 	/* check for packet from flight sim */
 	_fdm_input();
 
 	// send RC output to flight sim
 	_simulator_output();
+#endif
 
 	if (_update_count == 0 && _sitl != NULL) {
+#ifndef HIL_MODE
 		_update_gps(0, 0, 0, 0, 0, 0, false);
 		_update_barometer(0);
+#endif
 		_scheduler->timer_event();
         _scheduler->sitl_end_atomic();
 		in_timer = false;
@@ -325,6 +335,7 @@ void SITL_State::_timer_handler(int signum)
 	last_update_count = _update_count;
 
     if (_sitl != NULL) {
+#ifndef HIL_MODE
         _update_gps(_sitl->state.latitude, _sitl->state.longitude,
                     _sitl->state.altitude,
                     _sitl->state.speedN, _sitl->state.speedE, _sitl->state.speedD,
@@ -335,6 +346,7 @@ void SITL_State::_timer_handler(int signum)
                     _sitl->state.airspeed, _sitl->state.altitude);
         _update_barometer(_sitl->state.altitude);
         _update_compass(_sitl->state.rollDeg, _sitl->state.pitchDeg, _sitl->state.yawDeg);
+#endif
     }
 
 	// trigger all APM timers. We do this last as it can re-enable
@@ -345,7 +357,7 @@ void SITL_State::_timer_handler(int signum)
 	in_timer = false;
 }
 
-
+#ifndef HIL_MODE
 /*
   check for a SITL FDM packet
  */
@@ -412,6 +424,7 @@ void SITL_State::_fdm_input(void)
 	}
 
 }
+#endif
 
 /*
   apply servo rate filtering

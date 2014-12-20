@@ -26,6 +26,9 @@ public:
     // constructor
     AP_RangeFinder_PX4(RangeFinder &ranger, uint8_t instance, RangeFinder::RangeFinder_State &_state);
 
+    // destructor
+    ~AP_RangeFinder_PX4(void);
+    
     // static detection function
     static bool detect(RangeFinder &ranger, uint8_t instance);
 
@@ -35,6 +38,9 @@ public:
 private:
     int _fd;
     uint64_t _last_timestamp;
+
+    int16_t _last_max_distance_cm;
+    int16_t _last_min_distance_cm;
 
     // we need to keep track of how many PX4 drivers have been loaded
     // so we can open the right device filename

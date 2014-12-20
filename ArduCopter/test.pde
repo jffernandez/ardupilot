@@ -34,7 +34,7 @@ const struct Menu::command test_menu_commands[] PROGMEM = {
     {"shell", 				test_shell},
 #endif
 #if HIL_MODE == HIL_MODE_DISABLED
-    {"sonar",               test_sonar},
+    {"rangefinder",         test_sonar},
 #endif
 };
 
@@ -58,13 +58,13 @@ test_baro(uint8_t argc, const Menu::arg *argv)
 
     while(1) {
         delay(100);
-        alt = read_barometer();
+        read_barometer();
 
-        if (!barometer.healthy) {
+        if (!barometer.healthy()) {
             cliSerial->println_P(PSTR("not healthy"));
         } else {
             cliSerial->printf_P(PSTR("Alt: %0.2fm, Raw: %f Temperature: %.1f\n"),
-                                alt / 100.0,
+                                baro_alt / 100.0,
                                 barometer.get_pressure(), 
                                 barometer.get_temperature());
         }
@@ -198,17 +198,18 @@ static int8_t
 test_optflow(uint8_t argc, const Menu::arg *argv)
 {
 #if OPTFLOW == ENABLED
-    if(g.optflow_enabled) {
-        cliSerial->printf_P(PSTR("man id: %d\t"),optflow.read_register(ADNS3080_PRODUCT_ID));
+    if(optflow.enabled()) {
+        cliSerial->printf_P(PSTR("dev id: %d\t"),(int)optflow.device_id());
         print_hit_enter();
 
         while(1) {
             delay(200);
             optflow.update();
-            cliSerial->printf_P(PSTR("dx:%d\t dy:%d\t squal:%d\n"),
-                            optflow.dx,
-                            optflow.dy,
-                            optflow.surface_quality);
+            const Vector2f& flowRate = optflow.flowRate();
+            cliSerial->printf_P(PSTR("flowX : %7.4f\t flowY : %7.4f\t flow qual : %d\n"),
+                            flowRate.x,
+                            flowRate.y,
+                            (int)optflow.quality());
 
             if(cliSerial->available() > 0) {
                 return (0);
@@ -260,25 +261,24 @@ test_shell(uint8_t argc, const Menu::arg *argv)
 
 #if HIL_MODE == HIL_MODE_DISABLED
 /*
- *  test the sonar
+ *  test the rangefinders
  */
 static int8_t
 test_sonar(uint8_t argc, const Menu::arg *argv)
 {
 #if CONFIG_SONAR == ENABLED
-    if(!sonar.healthy()) {
-        cliSerial->printf_P(PSTR("Sonar disabled\n"));
-        return (0);
-    }
+	sonar.init();
 
-    // make sure sonar is initialised
-    init_sonar();
+    cliSerial->printf_P(PSTR("RangeFinder: %d devices detected\n"), sonar.num_sensors());
 
     print_hit_enter();
     while(1) {
         delay(100);
         sonar.update();
-        cliSerial->printf_P(PSTR("Sonar: %d cm\n"), sonar.distance_cm());
+
+        cliSerial->printf_P(PSTR("Primary: health %d distance_cm %d \n"), (int)sonar.healthy(), sonar.distance_cm());
+        cliSerial->printf_P(PSTR("All: device_0 type %d health %d distance_cm %d, device_1 type %d health %d distance_cm %d\n"), 
+        (int)sonar._type[0], (int)sonar.healthy(0), sonar.distance_cm(0), (int)sonar._type[1], (int)sonar.healthy(1), sonar.distance_cm(1));
 
         if(cliSerial->available() > 0) {
             return (0);

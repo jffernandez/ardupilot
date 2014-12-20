@@ -18,7 +18,7 @@
 
 extern const AP_HAL::HAL& hal;
 
-LogReader::LogReader(AP_AHRS &_ahrs, AP_InertialSensor &_ins, AP_Baro_HIL &_baro, AP_Compass_HIL &_compass, AP_GPS &_gps, AP_Airspeed &_airspeed) :
+LogReader::LogReader(AP_AHRS &_ahrs, AP_InertialSensor &_ins, AP_Baro_HIL &_baro, AP_Compass_HIL &_compass, AP_GPS &_gps, AP_Airspeed &_airspeed, DataFlash_Class &_dataflash) :
     vehicle(VEHICLE_UNKNOWN),
     fd(-1),
     ahrs(_ahrs),
@@ -27,8 +27,9 @@ LogReader::LogReader(AP_AHRS &_ahrs, AP_InertialSensor &_ins, AP_Baro_HIL &_baro
     compass(_compass),
     gps(_gps),
     airspeed(_airspeed),
-    accel_mask(3),
-    gyro_mask(3)
+    dataflash(_dataflash),
+    accel_mask(7),
+    gyro_mask(7)
 {}
 
 bool LogReader::open_log(const char *logfile)
@@ -93,6 +94,8 @@ struct PACKED log_Copter_Attitude {
     int16_t pitch;
     uint16_t control_yaw;
     uint16_t yaw;
+    uint16_t error_rp;
+    uint16_t error_yaw;
 };
 
 struct PACKED log_Copter_Nav_Tuning {
@@ -144,7 +147,7 @@ void LogReader::process_plane(uint8_t type, uint8_t *data, uint16_t length)
         memcpy(&msg, data, sizeof(msg));
         wait_timestamp(msg.time_ms);
         compass.setHIL(Vector3f(msg.mag_x - msg.offset_x, msg.mag_y - msg.offset_y, msg.mag_z - msg.offset_z));
-        compass.set_and_save_offsets(0, msg.offset_x, msg.offset_y, msg.offset_z);
+        compass.set_offsets(0, Vector3f(msg.offset_x, msg.offset_y, msg.offset_z));
         break;
     }
 
@@ -162,7 +165,7 @@ void LogReader::process_plane(uint8_t type, uint8_t *data, uint16_t length)
 
     case LOG_PLANE_AIRSPEED_MSG: {
         struct log_AIRSPEED msg;
-        if(sizeof(msg) != length) {
+        if (sizeof(msg) != length && length != sizeof(msg)+8) {
             printf("Bad AIRSPEED length\n");
             exit(1);
         }
@@ -186,7 +189,7 @@ void LogReader::process_rover(uint8_t type, uint8_t *data, uint16_t length)
         memcpy(&msg, data, sizeof(msg));
         wait_timestamp(msg.time_ms);
         compass.setHIL(Vector3f(msg.mag_x - msg.offset_x, msg.mag_y - msg.offset_y, msg.mag_z - msg.offset_z));
-        compass.set_and_save_offsets(0, msg.offset_x, msg.offset_y, msg.offset_z);
+        compass.set_offsets(0, Vector3f(msg.offset_x, msg.offset_y, msg.offset_z));
         break;
     }
 
@@ -216,14 +219,20 @@ void LogReader::process_copter(uint8_t type, uint8_t *data, uint16_t length)
         memcpy(&msg, data, sizeof(msg));
         wait_timestamp(msg.time_ms);
         compass.setHIL(Vector3f(msg.mag_x - msg.offset_x, msg.mag_y - msg.offset_y, msg.mag_z - msg.offset_z));
-        compass.set_and_save_offsets(0, msg.offset_x, msg.offset_y, msg.offset_z);
+        compass.set_offsets(0, Vector3f(msg.offset_x, msg.offset_y, msg.offset_z));
         break;
     }
 
     case LOG_COPTER_ATTITUDE_MSG: {
         struct log_Copter_Attitude msg;
-        if(sizeof(msg) != length) {
-            printf("Bad ATTITUDE length\n");
+        if (sizeof(msg) == length+sizeof(uint16_t)*2) {
+            // old style, without errors
+            memset(&msg, 0, sizeof(msg));
+            memcpy(&msg, data, length);
+        } else if (sizeof(msg) == length) {
+            memcpy(&msg, data, sizeof(msg));
+        } else {
+            printf("Bad ATTITUDE length %u should be %u\n", (unsigned)length, (unsigned)sizeof(msg));
             exit(1);
         }
         memcpy(&msg, data, sizeof(msg));
@@ -250,6 +259,13 @@ void LogReader::process_copter(uint8_t type, uint8_t *data, uint16_t length)
 
 bool LogReader::set_parameter(const char *name, float value)
 {
+    const char *ignore_parms[] = { "GPS_TYPE", "AHRS_EKF_USE" };
+    for (uint8_t i=0; i<sizeof(ignore_parms)/sizeof(ignore_parms[0]); i++) {
+        if (strcmp(name, ignore_parms[i]) == 0) {
+            ::printf("Ignoring set of %s to %f\n", name, value);
+            return true;
+        }
+    }
     enum ap_var_type var_type;
     AP_Param *vp = AP_Param::find(name, &var_type);
     if (vp == NULL) {
@@ -337,6 +353,7 @@ bool LogReader::update(uint8_t &type)
             ahrs.set_vehicle_class(AHRS_VEHICLE_GROUND);
             ahrs.set_fly_forward(true);
         }
+        dataflash.Log_Write_Message(msg.msg);
         break;
     }
 
@@ -354,6 +371,7 @@ bool LogReader::update(uint8_t &type)
         if (accel_mask & 1) {
             ins.set_accel(0, Vector3f(msg.accel_x, msg.accel_y, msg.accel_z));
         }
+        dataflash.Log_Write_IMU(ins);
         break;
     }
 
@@ -371,6 +389,25 @@ bool LogReader::update(uint8_t &type)
         if (accel_mask & 2) {
             ins.set_accel(1, Vector3f(msg.accel_x, msg.accel_y, msg.accel_z));
         }
+        dataflash.Log_Write_IMU(ins);
+        break;
+    }
+
+    case LOG_IMU3_MSG: {
+        struct log_IMU msg;
+        if(sizeof(msg) != f.length) {
+            printf("Bad IMU3 length\n");
+            exit(1);
+        }
+        memcpy(&msg, data, sizeof(msg));
+        wait_timestamp(msg.timestamp);
+        if (gyro_mask & 4) {
+            ins.set_gyro(2, Vector3f(msg.gyro_x, msg.gyro_y, msg.gyro_z));
+        }
+        if (accel_mask & 4) {
+            ins.set_accel(2, Vector3f(msg.accel_x, msg.accel_y, msg.accel_z));
+        }
+        dataflash.Log_Write_IMU(ins);
         break;
     }
 
@@ -402,6 +439,7 @@ bool LogReader::update(uint8_t &type)
             ground_alt_cm = msg.altitude;
         }
         rel_altitude = msg.rel_altitude*0.01f;
+        dataflash.Log_Write_GPS(gps, 0, rel_altitude);
         break;
     }
 
@@ -432,6 +470,7 @@ bool LogReader::update(uint8_t &type)
         if (msg.status == 3 && ground_alt_cm == 0) {
             ground_alt_cm = msg.altitude;
         }
+        dataflash.Log_Write_GPS(gps, 1, rel_altitude);
         break;
     }
 
@@ -449,13 +488,20 @@ bool LogReader::update(uint8_t &type)
 
     case LOG_BARO_MSG: {
         struct log_BARO msg;
-        if(sizeof(msg) != f.length) {
-            printf("Bad LOG_BARO length\n");
+        if (sizeof(msg) == f.length+sizeof(float)) {
+            // old style, without climbrate
+            memset(&msg, 0, sizeof(msg));
+            memcpy(&msg, data, f.length);
+        } else if (sizeof(msg) == f.length) {
+            memcpy(&msg, data, sizeof(msg));
+        } else {
+            printf("Bad LOG_BARO length %u expected %u\n",
+                   (unsigned)f.length, (unsigned)sizeof(msg));
             exit(1);
         }
-        memcpy(&msg, data, sizeof(msg));
         wait_timestamp(msg.timestamp);
         baro.setHIL(msg.pressure, msg.temperature*0.01f);
+        dataflash.Log_Write_Baro(baro);
         break;
     }
 
@@ -470,6 +516,18 @@ bool LogReader::update(uint8_t &type)
         break;        
     }
         
+    case LOG_AHR2_MSG: {
+        struct log_AHRS msg;
+        if(sizeof(msg) != f.length) {
+            printf("Bad AHR2 length %u should be %u\n", (unsigned)f.length, (unsigned)sizeof(msg));
+            exit(1);
+        }
+        memcpy(&msg, data, sizeof(msg));
+        wait_timestamp(msg.time_ms);
+        ahr2_attitude = Vector3f(msg.roll*0.01f, msg.pitch*0.01f, msg.yaw*0.01f);
+        break;
+    }
+
 
     default:
         if (vehicle == VEHICLE_PLANE) {

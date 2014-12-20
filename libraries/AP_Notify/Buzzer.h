@@ -28,14 +28,23 @@
  # define BUZZER_PIN    0       // pin undefined on other boards
 #endif
 
-class Buzzer
+#define BUZZER_ARMING_BUZZ_MS   3000    // arming buzz length in milliseconds (i.e. 3 seconds)
+
+#include "NotifyDevice.h"
+
+class Buzzer: public NotifyDevice
 {
 public:
     /// Constructor
-    Buzzer() : _counter(0), _pattern(NONE), _pattern_counter(0) {}
+    Buzzer() :
+        _counter(0),
+        _pattern(NONE),
+        _pattern_counter(0),
+        _arming_buzz_start_ms(0)
+    {}
 
     /// init - initialise the buzzer
-    void init(void);
+    bool init(void);
 
     /// update - updates buzzer according to timed_updated.  Should be called at 50Hz
     void update();
@@ -47,7 +56,10 @@ public:
         NONE = 0,
         SINGLE_BUZZ = 1,
         DOUBLE_BUZZ = 2,
-        GPS_GLITCH = 3
+        GPS_GLITCH = 3,
+        ARMING_BUZZ = 4,
+        BARO_GLITCH = 5,
+        EKF_BAD = 6
     };
 
     /// play_pattern - plays the defined buzzer pattern
@@ -63,11 +75,15 @@ private:
         uint8_t armed               : 1;    // 0 = disarmed, 1 = armed
         uint8_t failsafe_battery    : 1;    // 1 if battery failsafe has triggered
         uint8_t failsafe_gps        : 1;    // 1 if gps failsafe
+        uint8_t baro_glitching     : 1;    // 1 if baro alt is glitching
+        uint8_t arming_failed      : 1;    // 0 = failing checks, 1 = passed
+        uint8_t ekf_bad            : 1;    // 1 if ekf position has gone bad
     } _flags;
 
     uint8_t         _counter;           // reduces 50hz update down to 10hz for internal processing
     BuzzerPattern   _pattern;           // current pattern
     uint8_t         _pattern_counter;   // used to time on/off of current patter
+    uint32_t        _arming_buzz_start_ms;  // arming_buzz start time in milliseconds
 };
 
 #endif // __BUZZER_H__

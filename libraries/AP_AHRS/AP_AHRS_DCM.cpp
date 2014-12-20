@@ -36,6 +36,15 @@ extern const AP_HAL::HAL& hal;
 // http://gentlenav.googlecode.com/files/fastRotations.pdf
 #define SPIN_RATE_LIMIT 20
 
+// reset the current gyro drift estimate
+//  should be called if gyro offsets are recalculated
+void
+AP_AHRS_DCM::reset_gyro_drift(void)
+{
+    _omega_I.zero();
+    _omega_I_sum.zero();
+    _omega_I_sum_time = 0;
+}
 
 // run a full DCM update round
 void
@@ -143,7 +152,7 @@ AP_AHRS_DCM::check_matrix(void)
 {
     if (_dcm_matrix.is_nan()) {
         //Serial.printf("ERROR: DCM matrix NAN\n");
-        reset(true);
+        AP_AHRS_DCM::reset(true);
         return;
     }
     // some DCM matrix values can lead to an out of range error in
@@ -161,7 +170,7 @@ AP_AHRS_DCM::check_matrix(void)
             // in real trouble. All we can do is reset
             //Serial.printf("ERROR: DCM matrix error. _dcm_matrix.c.x=%f\n",
             //	   _dcm_matrix.c.x);
-            reset(true);
+            AP_AHRS_DCM::reset(true);
         }
     }
 }
@@ -242,7 +251,7 @@ AP_AHRS_DCM::normalize(void)
         // Our solution is blowing up and we will force back
         // to last euler angles
         _last_failure_ms = hal.scheduler->millis();
-        reset(true);
+        AP_AHRS_DCM::reset(true);
     }
 }
 
@@ -362,7 +371,7 @@ AP_AHRS_DCM::drift_correction_yaw(void)
     float yaw_error;
     float yaw_deltat;
 
-    if (use_compass()) {
+    if (AP_AHRS_DCM::use_compass()) {
         /*
           we are using compass for yaw
          */
@@ -442,6 +451,11 @@ AP_AHRS_DCM::drift_correction_yaw(void)
     // integration at higher rates
     float spin_rate = _omega.length();
 
+    // sanity check _kp_yaw
+    if (_kp_yaw < AP_AHRS_YAW_P_MIN) {
+        _kp_yaw = AP_AHRS_YAW_P_MIN;
+    }
+
     // update the proportional control to drag the
     // yaw back to the right value. We use a gain
     // that depends on the spin rate. See the fastRotations.pdf
@@ -511,6 +525,20 @@ AP_AHRS_DCM::drift_correction(float deltat)
             _ra_sum[i] += _accel_ef[i] * deltat;
         }
     }
+
+    //update _accel_ef_blended
+#if HAL_CPU_CLASS >= HAL_CPU_CLASS_75
+    if (_ins.get_accel_count() == 2 && _ins.get_accel_health(0) && _ins.get_accel_health(1)) {
+        float imu1_weight_target = _active_accel_instance == 0 ? 1.0f : 0.0f;
+        // slew _imu1_weight over one second
+        _imu1_weight += constrain_float(imu1_weight_target-_imu1_weight, -deltat, deltat);
+        _accel_ef_blended = _accel_ef[0] * _imu1_weight + _accel_ef[1] * (1.0f - _imu1_weight);
+    } else {
+        _accel_ef_blended = _accel_ef[_ins.get_primary_accel()];
+    }
+#else
+    _accel_ef_blended = _accel_ef[_ins.get_primary_accel()];
+#endif // HAL_CPU_CLASS >= HAL_CPU_CLASS_75
 
     // keep a sum of the deltat values, so we know how much time
     // we have integrated over
@@ -684,7 +712,7 @@ AP_AHRS_DCM::drift_correction(float deltat)
     // reduce the impact of the gps/accelerometers on yaw when we are
     // flat, but still allow for yaw correction using the
     // accelerometers at high roll angles as long as we have a GPS
-    if (use_compass()) {
+    if (AP_AHRS_DCM::use_compass()) {
         if (have_gps() && gps_gain == 1.0f) {
             error[besti].z *= sinf(fabsf(roll));
         } else {
@@ -714,6 +742,11 @@ AP_AHRS_DCM::drift_correction(float deltat)
 
     // base the P gain on the spin rate
     float spin_rate = _omega.length();
+
+    // sanity check _kp value
+    if (_kp < AP_AHRS_RP_P_MIN) {
+        _kp = AP_AHRS_RP_P_MIN;
+    }
 
     // we now want to calculate _omega_P and _omega_I. The
     // _omega_P value is what drags us quickly to the
@@ -837,12 +870,7 @@ AP_AHRS_DCM::euler_angles(void)
     _body_dcm_matrix.rotateXYinv(_trim);
     _body_dcm_matrix.to_euler(&roll, &pitch, &yaw);
 
-    roll_sensor     = degrees(roll)  * 100;
-    pitch_sensor    = degrees(pitch) * 100;
-    yaw_sensor      = degrees(yaw)   * 100;
-
-    if (yaw_sensor < 0)
-        yaw_sensor += 36000;
+    update_cd_values();
 }
 
 /* reporting of DCM state for MAVLink */
@@ -877,14 +905,16 @@ float AP_AHRS_DCM::get_error_yaw(void)
 
 // return our current position estimate using
 // dead-reckoning or GPS
-bool AP_AHRS_DCM::get_position(struct Location &loc)
+bool AP_AHRS_DCM::get_position(struct Location &loc) const
 {
     loc.lat = _last_lat;
     loc.lng = _last_lng;
     loc.alt = _baro.get_altitude() * 100 + _home.alt;
+    loc.flags.relative_alt = 0;
+    loc.flags.terrain_alt = 0;
     location_offset(loc, _position_offset_north, _position_offset_east);
     if (_flags.fly_forward && _have_position) {
-        location_update(loc, degrees(yaw), _gps.ground_speed() * _gps.get_lag());
+        location_update(loc, _gps.ground_course_cd() * 0.01f, _gps.ground_speed() * _gps.get_lag());
     }
     return _have_position;
 }

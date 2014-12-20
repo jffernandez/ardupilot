@@ -274,6 +274,7 @@ uint16_t DataFlash_Block::find_last_page_of_log(uint16_t log_number)
 
 #define PGM_UINT8(addr) pgm_read_byte((const prog_char *)addr)
 
+#ifndef DATAFLASH_NO_CLI
 /*
   read and print a log entry using the format strings from the given structure
  */
@@ -556,6 +557,7 @@ void DataFlash_Block::ListAvailableLogs(AP_HAL::BetterStream *port)
     }
     port->println();
 }
+#endif // DATAFLASH_NO_CLI
 
 // This function starts a new log file in the DataFlash, and writes
 // the format of supported messages in the log, plus all parameters
@@ -747,9 +749,14 @@ void DataFlash_Class::Log_Write_RCOUT(void)
         chan5         : hal.rcout->read(4),
         chan6         : hal.rcout->read(5),
         chan7         : hal.rcout->read(6),
-        chan8         : hal.rcout->read(7)
+        chan8         : hal.rcout->read(7),
+        chan9         : hal.rcout->read(8),
+        chan10        : hal.rcout->read(9),
+        chan11        : hal.rcout->read(10),
+        chan12        : hal.rcout->read(11)
     };
     WriteBlock(&pkt, sizeof(pkt));
+    Log_Write_ESC();
 }
 
 // Write a BARO packet
@@ -761,6 +768,7 @@ void DataFlash_Class::Log_Write_Baro(AP_Baro &baro)
         altitude      : baro.get_altitude(),
         pressure	  : baro.get_pressure(),
         temperature   : (int16_t)(baro.get_temperature() * 100),
+        climbrate     : baro.get_climb_rate()
     };
     WriteBlock(&pkt, sizeof(pkt));
 }
@@ -893,36 +901,38 @@ void DataFlash_Class::Log_Write_EKF(AP_AHRS_NavEKF &ahrs)
     struct log_EKF1 pkt = {
         LOG_PACKET_HEADER_INIT(LOG_EKF1_MSG),
         time_ms : hal.scheduler->millis(),
-        roll    : (int16_t)(100*degrees(euler.x)), // roll angle (centi-deg)
-        pitch   : (int16_t)(100*degrees(euler.y)), // pitch angle (centi-deg)
-        yaw     : (uint16_t)wrap_360_cd(100*degrees(euler.z)), // yaw angle (centi-deg)
+        roll    : (int16_t)(100*degrees(euler.x)), // roll angle (centi-deg, displayed as deg due to format string)
+        pitch   : (int16_t)(100*degrees(euler.y)), // pitch angle (centi-deg, displayed as deg due to format string)
+        yaw     : (uint16_t)wrap_360_cd(100*degrees(euler.z)), // yaw angle (centi-deg, displayed as deg due to format string)
         velN    : (float)(velNED.x), // velocity North (m/s)
         velE    : (float)(velNED.y), // velocity East (m/s)
         velD    : (float)(velNED.z), // velocity Down (m/s)
         posN    : (float)(posNED.x), // metres North
         posE    : (float)(posNED.y), // metres East
         posD    : (float)(posNED.z), // metres Down
-        gyrX    : (int8_t)(60*degrees(gyroBias.x)), // deg/min
-        gyrY    : (int8_t)(60*degrees(gyroBias.y)), // deg/min
-        gyrZ    : (int8_t)(60*degrees(gyroBias.z))  // deg/min
+        gyrX    : (int16_t)(100*degrees(gyroBias.x)), // cd/sec, displayed as deg/sec due to format string
+        gyrY    : (int16_t)(100*degrees(gyroBias.y)), // cd/sec, displayed as deg/sec due to format string
+        gyrZ    : (int16_t)(100*degrees(gyroBias.z)) // cd/sec, displayed as deg/sec due to format string
     };
     WriteBlock(&pkt, sizeof(pkt));
 
 	// Write second EKF packet
-    Vector3f accelBias;
+    float ratio;
+    float az1bias, az2bias;
     Vector3f wind;
     Vector3f magNED;
     Vector3f magXYZ;
-    ahrs.get_NavEKF().getAccelBias(accelBias);
+    ahrs.get_NavEKF().getIMU1Weighting(ratio);
+    ahrs.get_NavEKF().getAccelZBias(az1bias, az2bias);
     ahrs.get_NavEKF().getWind(wind);
     ahrs.get_NavEKF().getMagNED(magNED);
     ahrs.get_NavEKF().getMagXYZ(magXYZ);
     struct log_EKF2 pkt2 = {
         LOG_PACKET_HEADER_INIT(LOG_EKF2_MSG),
         time_ms : hal.scheduler->millis(),
-        accX    : (int8_t)(100*accelBias.x),
-        accY    : (int8_t)(100*accelBias.y),
-        accZ    : (int8_t)(100*accelBias.z),
+        Ratio   : (int8_t)(100*ratio),
+        AZ1bias : (int8_t)(100*az1bias),
+        AZ2bias : (int8_t)(100*az2bias),
         windN   : (int16_t)(100*wind.x),
         windE   : (int16_t)(100*wind.y),
         magN    : (int16_t)(magNED.x),
@@ -964,9 +974,10 @@ void DataFlash_Class::Log_Write_EKF(AP_AHRS_NavEKF &ahrs)
 	float tasVar;
     Vector2f offset;
     uint8_t faultStatus;
-    float deltaGyroBias;
+    uint8_t timeoutStatus;
     ahrs.get_NavEKF().getVariances(velVar, posVar, hgtVar, magVar, tasVar, offset);
-    ahrs.get_NavEKF().getFilterFaults(faultStatus, deltaGyroBias);
+    ahrs.get_NavEKF().getFilterFaults(faultStatus);
+    ahrs.get_NavEKF().getFilterTimeouts(timeoutStatus);
     struct log_EKF4 pkt4 = {
         LOG_PACKET_HEADER_INIT(LOG_EKF4_MSG),
         time_ms : hal.scheduler->millis(),
@@ -980,9 +991,32 @@ void DataFlash_Class::Log_Write_EKF(AP_AHRS_NavEKF &ahrs)
         offsetNorth : (int8_t)(offset.x),
         offsetEast : (int8_t)(offset.y),
         faults : (uint8_t)(faultStatus),
-        divergeRate : (uint8_t)(100*deltaGyroBias)
+        staticmode : (uint8_t)(ahrs.get_NavEKF().getStaticMode()),
+        timeouts : (uint8_t)(timeoutStatus)
     };
     WriteBlock(&pkt4, sizeof(pkt4));
+
+    // Write fifth EKF packet
+    float fscale;
+    float gndPos;
+    float flowInnovX, flowInnovY;
+    float augFlowInnovX, augFlowInnovY;
+    float rngInnov;
+    float range;
+    ahrs.get_NavEKF().getFlowDebug(fscale, gndPos, flowInnovX, flowInnovY, augFlowInnovX, augFlowInnovY, rngInnov, range);
+    struct log_EKF5 pkt5 = {
+        LOG_PACKET_HEADER_INIT(LOG_EKF5_MSG),
+        time_ms : hal.scheduler->millis(),
+        FIX : (int16_t)(1000*flowInnovX),
+        FIY : (int16_t)(1000*flowInnovY),
+        AFIX : (int16_t)(1000*augFlowInnovX),
+        AFIY : (int16_t)(1000*augFlowInnovY),
+        gndPos : (int16_t)(100*gndPos),
+        scaler: (uint8_t)(100*fscale),
+        RI : (int16_t)(100*rngInnov),
+        range : (uint16_t)(100*range)
+     };
+    WriteBlock(&pkt5, sizeof(pkt5));
 }
 #endif
 
@@ -1047,4 +1081,45 @@ void DataFlash_Class::Log_Write_Camera(const AP_AHRS &ahrs, const AP_GPS &gps, c
         yaw         : (uint16_t)ahrs.yaw_sensor
     };
     WriteBlock(&pkt, sizeof(pkt));
+}
+
+// Write ESC status messages
+void DataFlash_Class::Log_Write_ESC(void)
+{
+#if CONFIG_HAL_BOARD == HAL_BOARD_PX4
+    static int _esc_status_sub = -1;
+    struct esc_status_s esc_status;
+
+    if (_esc_status_sub == -1) {
+        // subscribe to ORB topic on first call
+        _esc_status_sub = orb_subscribe(ORB_ID(esc_status));  
+    } 
+
+    // check for new ESC status data
+    bool esc_updated = false;
+    orb_check(_esc_status_sub, &esc_updated);
+    if (esc_updated && (OK == orb_copy(ORB_ID(esc_status), _esc_status_sub, &esc_status))) {
+        if (esc_status.esc_count > 8) {
+            esc_status.esc_count = 8;
+        }
+        uint32_t time_ms = hal.scheduler->millis();
+        for (uint8_t i = 0; i < esc_status.esc_count; i++) {
+            // skip logging ESCs with a esc_address of zero, and this
+            // are probably not populated. The Pixhawk itself should
+            // be address zero
+            if (esc_status.esc[i].esc_address != 0) {
+                struct log_Esc pkt = {
+                    LOG_PACKET_HEADER_INIT((uint8_t)(LOG_ESC1_MSG + i)),
+                    time_ms     : time_ms,
+                    rpm         : (int16_t)(esc_status.esc[i].esc_rpm/10),
+                    voltage     : (int16_t)(esc_status.esc[i].esc_voltage*100.f + .5f),
+                    current     : (int16_t)(esc_status.esc[i].esc_current*100.f + .5f),
+                    temperature : (int16_t)(esc_status.esc[i].esc_temperature*100.f + .5f)
+                };
+
+                WriteBlock(&pkt, sizeof(pkt));
+            }
+        }
+    }
+#endif // CONFIG_HAL_BOARD
 }

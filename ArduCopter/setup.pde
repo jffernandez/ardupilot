@@ -9,6 +9,7 @@
 // Functions called from the setup menu
 static int8_t   setup_factory           (uint8_t argc, const Menu::arg *argv);
 static int8_t   setup_show              (uint8_t argc, const Menu::arg *argv);
+static int8_t   setup_set               (uint8_t argc, const Menu::arg *argv);
 #ifdef WITH_ESC_CALIB
 static int8_t   esc_calib               (uint8_t argc, const Menu::arg *argv);
 #endif
@@ -19,6 +20,7 @@ const struct Menu::command setup_menu_commands[] PROGMEM = {
     // =======          ===============
     {"reset",                       setup_factory},
     {"show",                        setup_show},
+    {"set",                         setup_set},
 #ifdef WITH_ESC_CALIB
     {"esc_calib",                   esc_calib},
 #endif
@@ -64,6 +66,65 @@ setup_factory(uint8_t argc, const Menu::arg *argv)
     }
     // note, cannot actually return here
     return(0);
+}
+
+//Set a parameter to a specified value. It will cast the value to the current type of the
+//parameter and make sure it fits in case of INT8 and INT16
+static int8_t setup_set(uint8_t argc, const Menu::arg *argv)
+{
+    int8_t value_int8;
+    int16_t value_int16;
+
+    AP_Param *param;
+    enum ap_var_type p_type;
+
+    if(argc!=3)
+    {
+        cliSerial->printf_P(PSTR("Invalid command. Usage: set <name> <value>\n"));
+        return 0;
+    }
+
+    param = AP_Param::find(argv[1].str, &p_type);
+    if(!param)
+    {
+        cliSerial->printf_P(PSTR("Param not found: %s\n"), argv[1].str);
+        return 0;
+    }
+
+    switch(p_type)
+    {
+        case AP_PARAM_INT8:
+            value_int8 = (int8_t)(argv[2].i);
+            if(argv[2].i!=value_int8)
+            {
+                cliSerial->printf_P(PSTR("Value out of range for type INT8\n"));
+                return 0;
+            }
+            ((AP_Int8*)param)->set_and_save(value_int8);
+            break;
+        case AP_PARAM_INT16:
+            value_int16 = (int16_t)(argv[2].i);
+            if(argv[2].i!=value_int16)
+            {
+                cliSerial->printf_P(PSTR("Value out of range for type INT16\n"));
+                return 0;
+            }
+            ((AP_Int16*)param)->set_and_save(value_int16);
+            break;
+
+        //int32 and float don't need bounds checking, just use the value provoded by Menu::arg
+        case AP_PARAM_INT32:
+            ((AP_Int32*)param)->set_and_save(argv[2].i);
+            break;
+        case AP_PARAM_FLOAT:
+            ((AP_Float*)param)->set_and_save(argv[2].f);
+            break;
+        default:
+            cliSerial->printf_P(PSTR("Cannot set parameter of type %d.\n"), p_type);
+            break;
+    }
+
+    return 0;
 }
 
 // Print the current configuration.
@@ -325,7 +386,7 @@ void report_optflow()
     cliSerial->printf_P(PSTR("OptFlow\n"));
     print_divider();
 
-    print_enabled(g.optflow_enabled);
+    print_enabled(optflow.enabled());
 
     print_blanks(2);
  #endif     // OPTFLOW == ENABLED
@@ -398,13 +459,17 @@ static void report_compass()
     cliSerial->printf_P(PSTR("Mag Dec: %4.4f\n"),
                     degrees(compass.get_declination()));
 
-    Vector3f offsets = compass.get_offsets();
-
     // mag offsets
-    cliSerial->printf_P(PSTR("Mag off: %4.4f, %4.4f, %4.4f\n"),
-                    offsets.x,
-                    offsets.y,
-                    offsets.z);
+    Vector3f offsets;
+    for (uint8_t i=0; i<compass.get_count(); i++) {
+        offsets = compass.get_offsets(i);
+        // mag offsets
+        cliSerial->printf_P(PSTR("Mag%d off: %4.4f, %4.4f, %4.4f\n"),
+                        (int)i,
+                        offsets.x,
+                        offsets.y,
+                        offsets.z);
+    }
 
     // motor compensation
     cliSerial->print_P(PSTR("Motor Comp: "));
@@ -417,11 +482,15 @@ static void report_compass()
         if( compass.motor_compensation_type() == AP_COMPASS_MOT_COMP_CURRENT ) {
             cliSerial->print_P(PSTR("Current"));
         }
-        Vector3f motor_compensation = compass.get_motor_compensation();
-        cliSerial->printf_P(PSTR("\nComp Vec: %4.2f, %4.2f, %4.2f\n"),
+        Vector3f motor_compensation;
+        for (uint8_t i=0; i<compass.get_count(); i++) {
+            motor_compensation = compass.get_motor_compensation(i);
+            cliSerial->printf_P(PSTR("\nComMot%d: %4.2f, %4.2f, %4.2f\n"),
+                        (int)i,
                         motor_compensation.x,
                         motor_compensation.y,
                         motor_compensation.z);
+        }
     }
     print_blanks(1);
 }
@@ -451,24 +520,6 @@ static void print_enabled(bool b)
     else
         cliSerial->print_P(PSTR("dis"));
     cliSerial->print_P(PSTR("abled\n"));
-}
-
-
-static void
-init_esc()
-{
-    // reduce update rate to motors to 50Hz
-    motors.set_update_rate(50);
-
-    // we enable the motors directly here instead of calling output_min because output_min would send a low signal to the ESC and disrupt the calibration process
-    motors.enable();
-    motors.armed(true);
-    while(1) {
-        read_radio();
-        delay(100);
-        AP_Notify::flags.esc_calibration = true;
-        motors.throttle_pass_through();
-    }
 }
 
 static void report_version()

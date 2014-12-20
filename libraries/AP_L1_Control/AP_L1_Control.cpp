@@ -9,7 +9,7 @@ extern const AP_HAL::HAL& hal;
 const AP_Param::GroupInfo AP_L1_Control::var_info[] PROGMEM = {
     // @Param: PERIOD
     // @DisplayName: L1 control period
-    // @Description: Period in seconds of L1 tracking loop. This needs to be larger for less responsive airframes. The default of 30 is very conservative, and for most RC aircraft will lead to slow and lazy turns. For smaller more agile aircraft a value closer to 20 is appropriate. When tuning, change this value in small increments, as a value that is much too small (say 5 or 10 below the right value) can lead to very radical turns, and a risk of stalling.
+    // @Description: Period in seconds of L1 tracking loop. This parameter is the primary control for agressiveness of turns in auto mode. This needs to be larger for less responsive airframes. The default of 30 is very conservative, and for most RC aircraft will lead to slow and lazy turns. For smaller more agile aircraft a value closer to 20 is appropriate, or even as low as 10 for some very agile aircraft. When tuning, change this value in small increments, as a value that is much too small (say 5 or 10 below the right value) can lead to very radical turns, and a risk of stalling.
 	// @Units: seconds
 	// @Range: 1-60
 	// @Increment: 1
@@ -114,9 +114,9 @@ float AP_L1_Control::crosstrack_error(void) const
  */
 void AP_L1_Control::_prevent_indecision(float &Nu)
 {
-    const float Nu_limit = 0.9f*M_PI;
-    if (fabs(Nu) > Nu_limit &&
-        fabs(_last_Nu) > Nu_limit &&
+    const float Nu_limit = 0.9f*M_PI_F;
+    if (fabsf(Nu) > Nu_limit &&
+        fabsf(_last_Nu) > Nu_limit &&
         fabsf(wrap_180_cd(_target_bearing_cd - _ahrs.yaw_sensor)) > 12000 &&
         Nu * _last_Nu < 0.0f) {
         // we are moving away from the target waypoint and pointing
@@ -169,6 +169,9 @@ void AP_L1_Control::update_waypoint(const struct Location &prev_WP, const struct
 	// if too small
 	if (AB.length() < 1.0e-6f) {
 		AB = location_diff(_current_loc, next_WP);
+        if (AB.length() < 1.0e-6f) {
+            AB = Vector2f(cosf(_ahrs.yaw), sinf(_ahrs.yaw));
+        }
 	}
 	AB.normalize();
 
@@ -260,9 +263,21 @@ void AP_L1_Control::update_loiter(const struct Location &center_WP, float radius
 
 	//Calculate the NE position of the aircraft relative to WP A
     Vector2f A_air = location_diff(center_WP, _current_loc);
-	
-    //Calculate the unit vector from WP A to aircraft
-    Vector2f A_air_unit = A_air.normalized();
+
+    // Calculate the unit vector from WP A to aircraft
+    // protect against being on the waypoint and having zero velocity
+    // if too close to the waypoint, use the velocity vector
+    // if the velocity vector is too small, use the heading vector
+    Vector2f A_air_unit;
+    if (A_air.length() > 0.1f) {
+        A_air_unit = A_air.normalized();
+    } else {
+        if (_groundspeed_vector.length() < 0.1f) {
+            A_air_unit = Vector2f(cosf(_ahrs.yaw), sinf(_ahrs.yaw));
+        } else {
+            A_air_unit = _groundspeed_vector.normalized();
+        }
+    }
 
 	//Calculate Nu to capture center_WP
 	float xtrackVelCap = A_air_unit % _groundspeed_vector; // Velocity across line - perpendicular to radial inbound to WP

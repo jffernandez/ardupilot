@@ -206,12 +206,30 @@ static void stabilize_stick_mixing_fbw()
  */
 static void stabilize_yaw(float speed_scaler)
 {
-    steering_control.ground_steering = (channel_roll->control_in == 0 && fabsf(relative_altitude()) < g.ground_steer_alt);
+    if (control_mode == AUTO && flight_stage == AP_SpdHgtControl::FLIGHT_LAND_FINAL) {
+        // in land final setup for ground steering
+        steering_control.ground_steering = true;
+    } else {
+        // otherwise use ground steering when no input control and we
+        // are below the GROUND_STEER_ALT
+        steering_control.ground_steering = (channel_roll->control_in == 0 && 
+                                            fabsf(relative_altitude()) < g.ground_steer_alt);
+        if (control_mode == AUTO && flight_stage == AP_SpdHgtControl::FLIGHT_LAND_APPROACH) {
+            // don't use ground steering on landing approach
+            steering_control.ground_steering = false;
+        }
+    }
+
 
     /*
-      first calculate steering_control.steering for a nose or tail wheel
+      first calculate steering_control.steering for a nose or tail
+      wheel.
+      We use "course hold" mode for the rudder when either in the
+      final stage of landing (when the wings are help level) or when
+      in course hold in FBWA mode (when we are below GROUND_STEER_ALT)
      */
-    if (steer_state.hold_course_cd != -1 && steering_control.ground_steering) {
+    if ((control_mode == AUTO && flight_stage == AP_SpdHgtControl::FLIGHT_LAND_FINAL) ||
+        (steer_state.hold_course_cd != -1 && steering_control.ground_steering)) {
         calc_nav_yaw_course();
     } else if (steering_control.ground_steering) {
         calc_nav_yaw_ground();
@@ -364,6 +382,11 @@ static void stabilize()
         rollController.reset_I();
         pitchController.reset_I();
         yawController.reset_I();
+
+        // if moving very slowly also zero the steering integrator
+        if (gps.ground_speed() < 1) {
+            steerController.reset_I();            
+        }
     }
 }
 
@@ -423,7 +446,8 @@ static void calc_nav_yaw_course(void)
 static void calc_nav_yaw_ground(void)
 {
     if (gps.ground_speed() < 1 && 
-        channel_throttle->control_in == 0) {
+        channel_throttle->control_in == 0 &&
+        flight_stage != AP_SpdHgtControl::FLIGHT_TAKEOFF) {
         // manual rudder control while still
         steer_state.locked_course = false;
         steer_state.locked_course_err = 0;
@@ -432,20 +456,24 @@ static void calc_nav_yaw_ground(void)
     }
 
     float steer_rate = (channel_rudder->control_in/4500.0f) * g.ground_steer_dps;
+    if (flight_stage == AP_SpdHgtControl::FLIGHT_TAKEOFF) {
+        steer_rate = 0;
+    }
     if (steer_rate != 0) {
         // pilot is giving rudder input
         steer_state.locked_course = false;        
     } else if (!steer_state.locked_course) {
         // pilot has released the rudder stick or we are still - lock the course
         steer_state.locked_course = true;
-        steer_state.locked_course_err = 0;
+        if (flight_stage != AP_SpdHgtControl::FLIGHT_TAKEOFF) {
+            steer_state.locked_course_err = 0;
+        }
     }
     if (!steer_state.locked_course) {
         // use a rate controller at the pilot specified rate
         steering_control.steering = steerController.get_steering_out_rate(steer_rate);
     } else {
         // use a error controller on the summed error
-        steer_state.locked_course_err += ahrs.get_gyro().z * G_Dt;
         int32_t yaw_error_cd = -ToDeg(steer_state.locked_course_err)*100;
         steering_control.steering = steerController.get_steering_out_angle_error(yaw_error_cd);
     }
@@ -453,6 +481,9 @@ static void calc_nav_yaw_ground(void)
 }
 
 
+/*
+  calculate a new nav_pitch_cd from the speed height controller
+ */
 static void calc_nav_pitch()
 {
     // Calculate the Pitch of the plane
@@ -462,9 +493,13 @@ static void calc_nav_pitch()
 }
 
 
+/*
+  calculate a new nav_roll_cd from the navigation controller
+ */
 static void calc_nav_roll()
 {
     nav_roll_cd = nav_controller->nav_roll_cd();
+    update_load_factor();
     nav_roll_cd = constrain_int32(nav_roll_cd, -roll_limit_cd, roll_limit_cd);
 }
 
@@ -488,6 +523,26 @@ static void throttle_slew_limit(int16_t last_throttle)
         }
         channel_throttle->radio_out = constrain_int16(channel_throttle->radio_out, last_throttle - temp, last_throttle + temp);
     }
+}
+
+/*****************************************
+Flap slew limit
+*****************************************/
+static void flap_slew_limit(int8_t &last_value, int8_t &new_value)
+{
+    uint8_t slewrate = g.flap_slewrate;
+    // if slew limit rate is set to zero then do not slew limit
+    if (slewrate) {                   
+        // limit flap change by the given percentage per second
+        float temp = slewrate * G_Dt;
+        // allow a minimum change of 1% per cycle. This means the
+        // slowest flaps we can do is full change over 2 seconds
+        if (temp < 1) {
+            temp = 1;
+        }
+        new_value = constrain_int16(new_value, last_value - temp, last_value + temp);
+    }
+    last_value = new_value;
 }
 
 
@@ -545,11 +600,6 @@ static bool suppress_throttle(void)
         auto_takeoff_check()) {
         // we're in auto takeoff 
         throttle_suppressed = false;
-        if (steer_state.hold_course_cd != -1) {
-            // update takeoff course hold, if already initialised
-            steer_state.hold_course_cd = ahrs.yaw_sensor;
-            gcs_send_text_fmt(PSTR("Holding course %ld"), steer_state.hold_course_cd);
-        }
         return false;
     }
     
@@ -633,20 +683,21 @@ static void flaperon_update(int8_t flap_percent)
     /*
       flaperons are implemented as a mixer between aileron and a
       percentage of flaps. Flap input can come from a manual channel
-      or from auto flaps. Note that negative manual flap percentates
-      are allowed, which give spoilerons
-     */
-    ch1 = channel_roll->radio_out;
+      or from auto flaps.
 
-    // 1500 is used here as the neutral value for the output
-    // mixer. User can still trim the flaps on the input side using
-    // the TRIM of the flap input channel. The *5 is to take a
-    // percentage to a value from -500 to 500 for the mixer
+      Use k_flaperon1 and k_flaperon2 channel trims to center servos.
+      Then adjust aileron trim for level flight (note that aileron trim is affected
+      by mixing gain). flapin_channel's trim is not used.
+     */
+     
+    ch1 = channel_roll->radio_out;
+    // The *5 is to take a percentage to a value from -500 to 500 for the mixer
     ch2 = 1500 - flap_percent * 5;
     channel_output_mixer(g.flaperon_output, ch1, ch2);
-    RC_Channel_aux::set_radio(RC_Channel_aux::k_flaperon1, ch1);
-    RC_Channel_aux::set_radio(RC_Channel_aux::k_flaperon2, ch2);
+    RC_Channel_aux::set_radio_trimmed(RC_Channel_aux::k_flaperon1, ch1);
+    RC_Channel_aux::set_radio_trimmed(RC_Channel_aux::k_flaperon2, ch2);
 }
+
 
 /*****************************************
 * Set the flight control servos based on the current calculated values
@@ -762,9 +813,17 @@ static void set_servos(void)
         channel_throttle->servo_out = 0;
 #else
         // convert 0 to 100% into PWM
+        uint8_t min_throttle = aparm.throttle_min.get();
+        uint8_t max_throttle = aparm.throttle_max.get();
+        if (control_mode == AUTO && flight_stage == AP_SpdHgtControl::FLIGHT_LAND_FINAL) {
+            min_throttle = 0;
+        }
+        if (control_mode == AUTO && flight_stage == AP_SpdHgtControl::FLIGHT_TAKEOFF) {
+            max_throttle = takeoff_throttle();
+        }
         channel_throttle->servo_out = constrain_int16(channel_throttle->servo_out, 
-                                                       aparm.throttle_min.get(), 
-                                                       aparm.throttle_max.get());
+                                                      min_throttle,
+                                                      max_throttle);
 
         if (suppress_throttle()) {
             // throttle is suppressed in auto mode
@@ -796,8 +855,10 @@ static void set_servos(void)
     }
 
     // Auto flap deployment
-    uint8_t auto_flap_percent = 0;
+    int8_t auto_flap_percent = 0;
     int8_t manual_flap_percent = 0;
+    static int8_t last_auto_flap;
+    static int8_t last_manual_flap;
 
     // work out any manual flap input
     RC_Channel *flapin = RC_Channel::rc_channel(g.flapin_channel-1);
@@ -820,12 +881,38 @@ static void set_servos(void)
         } else {
             auto_flap_percent = g.flap_1_percent;
         }
+
+        /*
+          special flap levels for takeoff and landing. This works
+          better than speed based flaps as it leads to less
+          possibility of oscillation
+         */
+        if (control_mode == AUTO) {
+            switch (flight_stage) {
+            case AP_SpdHgtControl::FLIGHT_TAKEOFF:
+                if (g.takeoff_flap_percent != 0) {
+                    auto_flap_percent = g.takeoff_flap_percent;
+                }
+                break;
+            case AP_SpdHgtControl::FLIGHT_LAND_APPROACH:
+            case AP_SpdHgtControl::FLIGHT_LAND_FINAL:
+                if (g.land_flap_percent != 0) {
+                    auto_flap_percent = g.land_flap_percent;
+                }
+                break;
+            default:
+                break;
+            }
+        }
     }
 
     // manual flap input overrides auto flap input
     if (abs(manual_flap_percent) > auto_flap_percent) {
         auto_flap_percent = manual_flap_percent;
     }
+
+    flap_slew_limit(last_auto_flap, auto_flap_percent);
+    flap_slew_limit(last_manual_flap, manual_flap_percent);
 
     RC_Channel_aux::set_servo_out(RC_Channel_aux::k_flap_auto, auto_flap_percent);
     RC_Channel_aux::set_servo_out(RC_Channel_aux::k_flap, manual_flap_percent);
@@ -874,10 +961,11 @@ static void set_servos(void)
     // OBC rules
     obc.check_crash_plane();
 #endif
-        
+
 #if HIL_MODE != HIL_MODE_DISABLED
     // get the servos to the GCS immediately for HIL
-    if (comm_get_txspace(MAVLINK_COMM_0) - MAVLINK_NUM_NON_PAYLOAD_BYTES >= MAVLINK_MSG_ID_RC_CHANNELS_SCALED_LEN) {
+    if (comm_get_txspace(MAVLINK_COMM_0) >= 
+        MAVLINK_MSG_ID_RC_CHANNELS_SCALED_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES) {
         send_servo_out(MAVLINK_COMM_0);
     }
     if (!g.hil_servos) {
@@ -912,3 +1000,61 @@ static void demo_servos(uint8_t i)
     }
 }
 
+/*
+  adjust nav_pitch_cd for STAB_PITCH_DOWN_CD. This is used to make
+  keeping up good airspeed in FBWA mode easier, as the plane will
+  automatically pitch down a little when at low throttle. It makes
+  FBWA landings without stalling much easier.
+ */
+static void adjust_nav_pitch_throttle(void)
+{
+    uint8_t throttle = throttle_percentage();
+    if (throttle < aparm.throttle_cruise) {
+        float p = (aparm.throttle_cruise - throttle) / (float)aparm.throttle_cruise;
+        nav_pitch_cd -= g.stab_pitch_down * 100.0f * p;
+    }
+}
+
+
+/*
+  calculate a new aerodynamic_load_factor and limit nav_roll_cd to
+  ensure that the load factor does not take us below the sustainable
+  airspeed
+ */
+static void update_load_factor(void)
+{
+    float demanded_roll = fabsf(nav_roll_cd*0.01f);
+    if (demanded_roll > 85) {
+        // limit to 85 degrees to prevent numerical errors
+        demanded_roll = 85;
+    }
+    aerodynamic_load_factor = 1.0f / safe_sqrt(cos(radians(demanded_roll)));
+
+    if (!aparm.stall_prevention) {
+        // stall prevention is disabled
+        return;
+    }
+    if (fly_inverted()) {
+        // no roll limits when inverted
+        return;
+    }
+
+    float max_load_factor = smoothed_airspeed / aparm.airspeed_min;
+    if (max_load_factor <= 1) {
+        // our airspeed is below the minimum airspeed. Limit roll to
+        // 25 degrees
+        nav_roll_cd = constrain_int32(nav_roll_cd, -2500, 2500);
+    } else if (max_load_factor < aerodynamic_load_factor) {
+        // the demanded nav_roll would take us past the aerodymamic
+        // load limit. Limit our roll to a bank angle that will keep
+        // the load within what the airframe can handle. We always
+        // allow at least 25 degrees of roll however, to ensure the
+        // aircraft can be maneuvered with a bad airspeed estimate. At
+        // 25 degrees the load factor is 1.1 (10%)
+        int32_t roll_limit = degrees(acosf(sq(1.0f / max_load_factor)))*100;
+        if (roll_limit < 2500) {
+            roll_limit = 2500;
+        }
+        nav_roll_cd = constrain_int32(nav_roll_cd, -roll_limit, roll_limit);
+    }    
+}

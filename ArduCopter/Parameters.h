@@ -81,7 +81,7 @@ public:
 
         // Misc
         //
-        k_param_log_bitmask = 20,
+        k_param_log_bitmask_old = 20,           // Deprecated
         k_param_log_last_filenumber,            // *** Deprecated - remove
                                                 // with next eeprom number
                                                 // change
@@ -115,8 +115,15 @@ public:
         k_param_serial0_baud,
         k_param_serial1_baud,
         k_param_serial2_baud,
-        k_param_land_repositioning,     // 52
+        k_param_land_repositioning,
         k_param_sonar, // sonar object
+        k_param_ekfcheck_thresh,
+        k_param_terrain,
+        k_param_acro_expo,
+        k_param_throttle_deadzone,
+        k_param_optflow,
+        k_param_dcmcheck_thresh,        // 59
+        k_param_log_bitmask,
 
         // 65: AP_Limits Library
         k_param_limits = 65,            // deprecated - remove
@@ -124,7 +131,8 @@ public:
         k_param_geofence_limit,         // deprecated - remove
         k_param_altitude_limit,         // deprecated - remove
         k_param_fence,
-        k_param_gps_glitch,             // 70
+        k_param_gps_glitch,
+        k_param_baro_glitch,            // 71
 
         //
         // 75: Singlecopter, CoaxCopter
@@ -171,6 +179,7 @@ public:
         k_param_telem_delay,
         k_param_gcs2,
         k_param_serial2_baud_old, // deprecated
+        k_param_serial2_protocol,
 
         //
         // 140: Sensor parameters
@@ -185,7 +194,7 @@ public:
         k_param_compass,
         k_param_sonar_enabled_old, // deprecated
         k_param_frame_orientation,
-        k_param_optflow_enabled,
+        k_param_optflow_enabled,    // deprecated
         k_param_fs_batt_voltage,
         k_param_ch7_option,
         k_param_auto_slew_rate,     // deprecated - can be deleted
@@ -210,7 +219,7 @@ public:
         //
         k_param_camera = 165,
         k_param_camera_mount,
-        k_param_camera_mount2,
+        k_param_camera_mount2,      // deprecated
 
         //
         // Batery monitoring parameters
@@ -294,8 +303,8 @@ public:
         k_param_pid_nav_lon,        // 234 - remove
         k_param_p_alt_hold,
         k_param_p_throttle_rate,
-        k_param_pid_optflow_roll,
-        k_param_pid_optflow_pitch,
+        k_param_pid_optflow_roll,       // 237 - remove
+        k_param_pid_optflow_pitch,      // 238 - remove
         k_param_acro_balance_roll_old,  // 239 - remove
         k_param_acro_balance_pitch_old, // 240 - remove
         k_param_pid_throttle_accel,
@@ -317,6 +326,7 @@ public:
     AP_Int16        serial1_baud;
 #if MAVLINK_COMM_NUM_BUFFERS > 2
     AP_Int16        serial2_baud;
+    AP_Int8         serial2_protocol;
 #endif
     AP_Int8         telem_delay;
 
@@ -332,7 +342,6 @@ public:
     AP_Int16        gps_hdop_good;              // GPS Hdop value at or below this value represent a good position
 
     AP_Int8         compass_enabled;
-    AP_Int8         optflow_enabled;
     AP_Int8         super_simple;
     AP_Int16        rtl_alt_final;
 
@@ -359,6 +368,7 @@ public:
     AP_Int16        failsafe_throttle_value;
     AP_Int16        throttle_cruise;
     AP_Int16        throttle_mid;
+    AP_Int16        throttle_deadzone;
 
     // Flight modes
     //
@@ -372,7 +382,7 @@ public:
 
     // Misc
     //
-    AP_Int16        log_bitmask;
+    AP_Int32        log_bitmask;
     AP_Int8         esc_calibrate;
     AP_Int8         radio_tuning;
     AP_Int16        radio_tuning_high;
@@ -383,6 +393,8 @@ public:
     AP_Int8         arming_check;
 
     AP_Int8         land_repositioning;
+    AP_Float        ekfcheck_thresh;
+    AP_Float        dcmcheck_thresh;
 
 #if FRAME_CONFIG ==     HELI_FRAME
     // Heli
@@ -428,6 +440,7 @@ public:
     AP_Float                acro_balance_roll;
     AP_Float                acro_balance_pitch;
     AP_Int8                 acro_trainer;
+    AP_Float                acro_expo;
 
     // PI/D controllers
 #if FRAME_CONFIG == HELI_FRAME
@@ -444,8 +457,6 @@ public:
 
     AC_P                    p_throttle_rate;
     AC_PID                  pid_throttle_accel;
-    AC_PID                  pid_optflow_roll;
-    AC_PID                  pid_optflow_pitch;
 
     AC_P                    p_loiter_pos;
     AC_P                    p_stabilize_roll;
@@ -505,8 +516,6 @@ public:
 
         p_throttle_rate         (THROTTLE_RATE_P),
         pid_throttle_accel      (THROTTLE_ACCEL_P,      THROTTLE_ACCEL_I,       THROTTLE_ACCEL_D,       THROTTLE_ACCEL_IMAX),
-        pid_optflow_roll        (OPTFLOW_ROLL_P,        OPTFLOW_ROLL_I,         OPTFLOW_ROLL_D,         OPTFLOW_IMAX),
-        pid_optflow_pitch       (OPTFLOW_PITCH_P,       OPTFLOW_PITCH_I,        OPTFLOW_PITCH_D,        OPTFLOW_IMAX),
 
         // P controller	        initial P
         //----------------------------------------------------------------------

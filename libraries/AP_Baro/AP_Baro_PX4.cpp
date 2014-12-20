@@ -46,9 +46,9 @@ uint8_t AP_Baro_PX4::read(void)
     _accumulate();
 
     // consider the baro healthy if we got a reading in the last 0.2s
-    healthy = (hrt_absolute_time() - _last_timestamp < 200000);
-    if (!healthy || _sum_count == 0) {
-        return healthy;
+    _flags.healthy = (hal.scheduler->micros64() - _last_timestamp < 200000);
+    if (!_flags.healthy || _sum_count == 0) {
+        return _flags.healthy;
     }
 
     _pressure    = (_pressure_sum / _sum_count) * 100.0f;
@@ -79,7 +79,7 @@ float AP_Baro_PX4::get_pressure() {
     return _pressure;
 }
 
-float AP_Baro_PX4::get_temperature() {
+float AP_Baro_PX4::get_temperature() const {
     return _temperature;
 }
 

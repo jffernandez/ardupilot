@@ -34,12 +34,14 @@ const AP_Param::GroupInfo AP_Baro::var_info[] PROGMEM = {
     // @Param: ABS_PRESS
     // @DisplayName: Absolute Pressure
     // @Description: calibrated ground pressure in Pascals
+    // @Units: pascals
     // @Increment: 1
     AP_GROUPINFO("ABS_PRESS", 2, AP_Baro, _ground_pressure, 0),
 
     // @Param: TEMP
     // @DisplayName: ground temperature
     // @Description: calibrated ground temperature in degrees Celsius
+    // @Units: degrees celsius
     // @Increment: 1
     AP_GROUPINFO("TEMP", 3, AP_Baro, _ground_temperature, 0),
 
@@ -67,14 +69,14 @@ void AP_Baro::calibrate()
 
     {
         uint32_t tstart = hal.scheduler->millis();
-        while (ground_pressure == 0 || !healthy) {
+        while (ground_pressure == 0 || !_flags.healthy) {
             read();         // Get initial data from absolute pressure sensor
             if (hal.scheduler->millis() - tstart > 500) {
                 hal.scheduler->panic(PSTR("PANIC: AP_Baro::read unsuccessful "
                         "for more than 500ms in AP_Baro::calibrate [1]\r\n"));
             }
             ground_pressure         = get_pressure();
-            ground_temperature      = get_temperature();
+            ground_temperature      = get_calibration_temperature();
             hal.scheduler->delay(20);
         }
     }
@@ -89,9 +91,9 @@ void AP_Baro::calibrate()
                 hal.scheduler->panic(PSTR("PANIC: AP_Baro::read unsuccessful "
                         "for more than 500ms in AP_Baro::calibrate [2]\r\n"));
             }
-        } while (!healthy);
+        } while (!_flags.healthy);
         ground_pressure     = get_pressure();
-        ground_temperature  = get_temperature();
+        ground_temperature  = get_calibration_temperature();
 
         hal.scheduler->delay(100);
     }
@@ -106,10 +108,10 @@ void AP_Baro::calibrate()
                 hal.scheduler->panic(PSTR("PANIC: AP_Baro::read unsuccessful "
                         "for more than 500ms in AP_Baro::calibrate [3]\r\n"));
             }
-        } while (!healthy);
+        } while (!_flags.healthy);
         ground_pressure = (ground_pressure * 0.8f) + (get_pressure() * 0.2f);
         ground_temperature = (ground_temperature * 0.8f) + 
-            (get_temperature() * 0.2f);
+            (get_calibration_temperature() * 0.2f);
 
         hal.scheduler->delay(100);
     }
@@ -125,13 +127,20 @@ void AP_Baro::calibrate()
 */
 void AP_Baro::update_calibration()
 {
-    _ground_pressure.set(get_pressure());
-    _ground_temperature.set(get_temperature());
+    float pressure = get_pressure();
+    _ground_pressure.set(pressure);
+    float last_temperature = _ground_temperature;
+    _ground_temperature.set(get_calibration_temperature());
+    if (fabsf(last_temperature - _ground_temperature) > 3) {
+        // reset _EAS2TAS to force it to recalculate. This happens
+        // when a digital airspeed sensor comes online
+        _EAS2TAS = 0;
+    }
 }
 
 // return altitude difference in meters between current pressure and a
 // given base_pressure in Pascal
-float AP_Baro::get_altitude_difference(float base_pressure, float pressure)
+float AP_Baro::get_altitude_difference(float base_pressure, float pressure) const
 {
     float ret;
 #if HAL_CPU_CLASS <= HAL_CPU_CLASS_16
@@ -166,9 +175,19 @@ float AP_Baro::get_altitude(void)
         return _altitude + _alt_offset;
     }
 
-    _altitude = get_altitude_difference(_ground_pressure, get_pressure());
+    float pressure = get_pressure();
+    float alt = get_altitude_difference(_ground_pressure, pressure);
 
+    // record that we have consumed latest data
     _last_altitude_t = _last_update;
+
+    // sanity check altitude
+    if (isnan(alt) || isinf(alt)) {
+        _flags.alt_ok = false;
+    } else {
+        _altitude = alt;
+        _flags.alt_ok = true;
+    }
 
     // ensure the climb rate filter is updated
     _climb_rate_filter.update(_altitude, _last_update);
@@ -202,3 +221,33 @@ float AP_Baro::get_climb_rate(void)
     return _climb_rate_filter.slope() * 1.0e3f;
 }
 
+
+/*
+  set external temperature to be used for calibration (degrees C)
+ */
+void AP_Baro::set_external_temperature(float temperature)
+{
+    _external_temperature = temperature;
+    _last_external_temperature_ms = hal.scheduler->millis();
+}
+
+/*
+  get the temperature in degrees C to be used for calibration purposes
+ */
+float AP_Baro::get_calibration_temperature(void) const
+{
+    // if we have a recent external temperature then use it
+    if (_last_external_temperature_ms != 0 && hal.scheduler->millis() - _last_external_temperature_ms < 10000) {
+        return _external_temperature;
+    }
+    // if we don't have an external temperature then use the minimum
+    // of the barometer temperature and 25 degrees C. The reason for
+    // not just using the baro temperature is it tends to read high,
+    // often 30 degrees above the actual temperature. That means the
+    // EAS2TAS tends to be off by quite a large margin
+    float ret = get_temperature();
+    if (ret > 25) {
+        ret = 25;
+    }
+    return ret;    
+}

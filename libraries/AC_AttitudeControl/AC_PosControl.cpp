@@ -84,6 +84,10 @@ void AC_PosControl::set_dt(float delta_sec)
 
     // update rate controller's d filter
     _pid_alt_accel.set_d_lpf_alpha(POSCONTROL_ACCEL_Z_DTERM_FILTER, _dt);
+
+    // update rate z-axis velocity error and accel error filters
+    _vel_error_filter.set_cutoff_frequency(_dt,POSCONTROL_VEL_ERROR_CUTOFF_FREQ);
+    _accel_error_filter.set_cutoff_frequency(_dt,POSCONTROL_ACCEL_ERROR_CUTOFF_FREQ);
 }
 
 /// set_speed_z - sets maximum climb and descent rates
@@ -133,11 +137,11 @@ void AC_PosControl::set_alt_target_with_slew(float alt_cm, float dt)
 ///     should be called continuously (with dt set to be the expected time between calls)
 ///     actual position target will be moved no faster than the speed_down and speed_up
 ///     target will also be stopped if the motors hit their limits or leash length is exceeded
-void AC_PosControl::set_alt_target_from_climb_rate(float climb_rate_cms, float dt)
+void AC_PosControl::set_alt_target_from_climb_rate(float climb_rate_cms, float dt, bool force_descend)
 {
     // adjust desired alt if motors have not hit their limits
     // To-Do: add check of _limit.pos_up and _limit.pos_down?
-    if ((climb_rate_cms<0 && !_motors.limit.throttle_lower) || (climb_rate_cms>0 && !_motors.limit.throttle_upper)) {
+    if ((climb_rate_cms<0 && (!_motors.limit.throttle_lower || force_descend)) || (climb_rate_cms>0 && !_motors.limit.throttle_upper)) {
         _pos_target.z += climb_rate_cms * dt;
     }
 }
@@ -195,10 +199,11 @@ void AC_PosControl::init_takeoff()
 
     _pos_target.z = curr_pos.z + POSCONTROL_TAKEOFF_JUMP_CM;
 
-    // clear i term from acceleration controller
-    if (_pid_alt_accel.get_integrator() < 0) {
-        _pid_alt_accel.reset_I();
-    }
+    // freeze feedforward to avoid jump
+    freeze_ff_z();
+
+    // shift difference between last motor out and hover throttle into accelerometer I
+    _pid_alt_accel.set_integrator(_motors.get_throttle_out()-_throttle_hover);
 }
 
 // is_active_z - returns true if the z-axis position controller has been run very recently
@@ -242,7 +247,6 @@ void AC_PosControl::calc_leash_length_z()
 void AC_PosControl::pos_to_rate_z()
 {
     float curr_alt = _inav.get_altitude();
-    float linear_distance;  // half the distance we swap between linear and sqrt and the distance we offset sqrt.
 
     // clear position limit flags
     _limit.pos_up = false;
@@ -269,19 +273,8 @@ void AC_PosControl::pos_to_rate_z()
         _limit.pos_down = true;
     }
 
-    // check kP to avoid division by zero
-    if (_p_alt_pos.kP() != 0.0f) {
-        linear_distance = _accel_z_cms/(2.0f*_p_alt_pos.kP()*_p_alt_pos.kP());
-        if (_pos_error.z > 2*linear_distance ) {
-            _vel_target.z = safe_sqrt(2.0f*_accel_z_cms*(_pos_error.z-linear_distance));
-        }else if (_pos_error.z < -2.0f*linear_distance) {
-            _vel_target.z = -safe_sqrt(2.0f*_accel_z_cms*(-_pos_error.z-linear_distance));
-        }else{
-            _vel_target.z = _p_alt_pos.get_p(_pos_error.z);
-        }
-    }else{
-        _vel_target.z = 0;
-    }
+    // calculate _vel_target.z using from _pos_error.z using sqrt controller
+    _vel_target.z = AC_AttitudeControl::sqrt_controller(_pos_error.z, _p_alt_pos.kP(), _accel_z_cms);
 
     // call rate based throttle controller which will update accel based throttle controller targets
     rate_to_accel_z();
@@ -333,10 +326,12 @@ void AC_PosControl::rate_to_accel_z()
     if (_flags.reset_rate_to_accel_z) {
         // Reset Filter
         _vel_error.z = 0;
+        _vel_error_filter.reset(0);
         desired_accel = 0;
         _flags.reset_rate_to_accel_z = false;
     } else {
-        _vel_error.z = (_vel_target.z - curr_vel.z);
+        // calculate rate error and filter with cut off frequency of 2 Hz
+        _vel_error.z = _vel_error_filter.apply(_vel_target.z - curr_vel.z);
     }
 
     // calculate p
@@ -358,17 +353,17 @@ void AC_PosControl::accel_to_throttle(float accel_target_z)
     int32_t p,i,d;              // used to capture pid values for logging
 
     // Calculate Earth Frame Z acceleration
-    z_accel_meas = -(_ahrs.get_accel_ef().z + GRAVITY_MSS) * 100.0f;
+    z_accel_meas = -(_ahrs.get_accel_ef_blended().z + GRAVITY_MSS) * 100.0f;
 
     // reset target altitude if this controller has just been engaged
     if (_flags.reset_accel_to_throttle) {
         // Reset Filter
         _accel_error.z = 0;
+        _accel_error_filter.reset(0);
         _flags.reset_accel_to_throttle = false;
     } else {
         // calculate accel error and Filter with fc = 2 Hz
-        // To-Do: replace constant below with one that is adjusted for update rate
-        _accel_error.z = _accel_error.z + 0.11164f * (constrain_float(accel_target_z - z_accel_meas, -32000, 32000) - _accel_error.z);
+        _accel_error.z = _accel_error_filter.apply(constrain_float(accel_target_z - z_accel_meas, -32000, 32000));
     }
 
     // separately calculate p, i, d values for logging
@@ -386,11 +381,8 @@ void AC_PosControl::accel_to_throttle(float accel_target_z)
     // get d term
     d = _pid_alt_accel.get_d(_accel_error.z, _dt);
 
-    // To-Do: pull min/max throttle from motors
-    // To-Do: we had a contraint here but it's now removed, is this ok?  with the motors library handle it ok?
+    // send throttle to attitude controller with angle boost
     _attitude_control.set_throttle_out((int16_t)p+i+d+_throttle_hover, true);
-    
-    // to-do add back in PID logging?
 }
 
 ///
@@ -468,7 +460,7 @@ void AC_PosControl::get_stopping_point_xy(Vector3f &stopping_point) const
     float vel_total = pythagorous2(curr_vel.x, curr_vel.y);
 
     // avoid divide by zero by using current position if the velocity is below 10cm/s, kP is very low or acceleration is zero
-    if (kP <= 0.0f || _accel_cms <= 0.0f) {
+    if (kP <= 0.0f || _accel_cms <= 0.0f || vel_total == 0.0f) {
         stopping_point.x = curr_pos.x;
         stopping_point.y = curr_pos.y;
         return;
@@ -538,12 +530,13 @@ void AC_PosControl::init_xy_controller()
 }
 
 /// update_xy_controller - run the horizontal position controller - should be called at 100hz or higher
-void AC_PosControl::update_xy_controller(bool use_desired_velocity)
+void AC_PosControl::update_xy_controller(bool use_desired_velocity, float ekfNavVelGainScaler)
 {
     // catch if we've just been started
     uint32_t now = hal.scheduler->millis();
     if ((now - _last_update_xy_ms) >= POSCONTROL_ACTIVE_TIMEOUT_MS) {
         init_xy_controller();
+        now = _last_update_xy_ms;
     }
 
     // check if xy leash needs to be recalculated
@@ -568,17 +561,17 @@ void AC_PosControl::update_xy_controller(bool use_desired_velocity)
             break;
         case 1:
             // run position controller's position error to desired velocity step
-            pos_to_rate_xy(use_desired_velocity,_dt_xy);
+            pos_to_rate_xy(use_desired_velocity,_dt_xy, ekfNavVelGainScaler);
             _xy_step++;
             break;
         case 2:
             // run position controller's velocity to acceleration step
-            rate_to_accel_xy(_dt_xy);
+            rate_to_accel_xy(_dt_xy, ekfNavVelGainScaler);
             _xy_step++;
             break;
         case 3:
             // run position controller's acceleration to lean angle step
-            accel_to_lean_angles();
+            accel_to_lean_angles(ekfNavVelGainScaler);
             _xy_step++;
             break;
     }
@@ -619,7 +612,7 @@ void AC_PosControl::init_vel_controller_xyz()
 ///     velocity targets should we set using set_desired_velocity_xyz() method
 ///     callers should use get_roll() and get_pitch() methods and sent to the attitude controller
 ///     throttle targets will be sent directly to the motors
-void AC_PosControl::update_vel_controller_xyz()
+void AC_PosControl::update_vel_controller_xyz(float ekfNavVelGainScaler)
 {
     // capture time since last iteration
     uint32_t now = hal.scheduler->millis();
@@ -643,13 +636,13 @@ void AC_PosControl::update_vel_controller_xyz()
         desired_vel_to_pos(dt_xy);
 
         // run position controller's position error to desired velocity step
-        pos_to_rate_xy(true, dt_xy);
+        pos_to_rate_xy(true, dt_xy, ekfNavVelGainScaler);
 
         // run velocity to acceleration step
-        rate_to_accel_xy(dt_xy);
+        rate_to_accel_xy(dt_xy, ekfNavVelGainScaler);
 
         // run acceleration to lean angle step
-        accel_to_lean_angles();
+        accel_to_lean_angles(ekfNavVelGainScaler);
     }
 
     // update altitude target
@@ -695,11 +688,11 @@ void AC_PosControl::desired_vel_to_pos(float nav_dt)
 ///     when use_desired_rate is set to true:
 ///         desired velocity (_vel_desired) is combined into final target velocity and
 ///         velocity due to position error is reduce to a maximum of 1m/s
-void AC_PosControl::pos_to_rate_xy(bool use_desired_rate, float dt)
+void AC_PosControl::pos_to_rate_xy(bool use_desired_rate, float dt, float ekfNavVelGainScaler)
 {
     Vector3f curr_pos = _inav.get_position();
     float linear_distance;      // the distance we swap between linear and sqrt velocity response
-    float kP = _p_pos_xy.kP();
+    float kP = ekfNavVelGainScaler * _p_pos_xy.kP(); // scale gains to compensate for noisy optical flow measurement in the EKF
 
     // avoid divide by zero
     if (kP <= 0.0f) {
@@ -762,7 +755,7 @@ void AC_PosControl::pos_to_rate_xy(bool use_desired_rate, float dt)
 
 /// rate_to_accel_xy - horizontal desired rate to desired acceleration
 ///    converts desired velocities in lat/lon directions to accelerations in lat/lon frame
-void AC_PosControl::rate_to_accel_xy(float dt)
+void AC_PosControl::rate_to_accel_xy(float dt, float ekfNavVelGainScaler)
 {
     const Vector3f &vel_curr = _inav.get_velocity();  // current velocity in cm/s
     float accel_total;                          // total acceleration in cm/s/s
@@ -809,9 +802,9 @@ void AC_PosControl::rate_to_accel_xy(float dt)
         lon_i = _pid_rate_lon.get_i(_vel_error.y, dt);
     }
 
-    // combine feed forward accel with PID output from velocity error
-    _accel_target.x = _accel_feedforward.x + _pid_rate_lat.get_p(_vel_error.x) + lat_i + _pid_rate_lat.get_d(_vel_error.x, dt);
-    _accel_target.y = _accel_feedforward.y + _pid_rate_lon.get_p(_vel_error.y) + lon_i + _pid_rate_lon.get_d(_vel_error.y, dt);
+    // combine feed forward accel with PID output from velocity error and scale PID output to compensate for optical flow measurement induced EKF noise
+    _accel_target.x = _accel_feedforward.x + (_pid_rate_lat.get_p(_vel_error.x) + lat_i + _pid_rate_lat.get_d(_vel_error.x, dt)) * ekfNavVelGainScaler;
+    _accel_target.y = _accel_feedforward.y + (_pid_rate_lon.get_p(_vel_error.y) + lon_i + _pid_rate_lon.get_d(_vel_error.y, dt)) * ekfNavVelGainScaler;
 
     // scale desired acceleration if it's beyond acceptable limit
     // To-Do: move this check down to the accel_to_lean_angle method?
@@ -828,8 +821,15 @@ void AC_PosControl::rate_to_accel_xy(float dt)
 
 /// accel_to_lean_angles - horizontal desired acceleration to lean angles
 ///    converts desired accelerations provided in lat/lon frame to roll/pitch angles
-void AC_PosControl::accel_to_lean_angles()
+void AC_PosControl::accel_to_lean_angles(float ekfNavVelGainScaler)
 {
+    // catch if we've just been started
+    uint32_t now = hal.scheduler->millis();
+    if ((now - _last_update_xy_ms) >= POSCONTROL_ACTIVE_TIMEOUT_MS) {
+        now = _last_update_xy_ms;
+    }
+    float dt_xy = (now - _last_update_xy_ms) * 0.001f;
+
     float accel_right, accel_forward;
     float lean_angle_max = _attitude_control.lean_angle_max();
 
@@ -842,6 +842,35 @@ void AC_PosControl::accel_to_lean_angles()
     // update angle targets that will be passed to stabilize controller
     _roll_target = constrain_float(fast_atan(accel_right*_ahrs.cos_pitch()/(GRAVITY_MSS * 100))*(18000/M_PI), -lean_angle_max, lean_angle_max);
     _pitch_target = constrain_float(fast_atan(-accel_forward/(GRAVITY_MSS * 100))*(18000/M_PI),-lean_angle_max, lean_angle_max);
+
+    // apply a rate limit of 100 deg/sec - required due to optical flow sensor saturation and impulse noise effects
+    static float lastRollDem = 0.0f;
+    static float lastPitchDem = 0.0f;
+    float maxDeltaAngle = dt_xy * 10000.0f;
+    if (_roll_target - lastRollDem > maxDeltaAngle) {
+        _roll_target = lastRollDem + maxDeltaAngle;
+    } else if (_roll_target - lastRollDem < -maxDeltaAngle) {
+        _roll_target = lastRollDem - maxDeltaAngle;
+    }
+    lastRollDem = _roll_target;
+    if (_pitch_target - lastPitchDem > maxDeltaAngle) {
+        _pitch_target = lastPitchDem + maxDeltaAngle;
+    } else if (_pitch_target - lastPitchDem < -maxDeltaAngle) {
+        _pitch_target = lastPitchDem - maxDeltaAngle;
+    }
+    lastPitchDem = _pitch_target;
+
+    // 5Hz lowpass filter on angles - required due to optical flow  noise
+    float freq_cut = 5.0f * ekfNavVelGainScaler;
+    float alpha = constrain_float(dt_xy/(dt_xy + 1.0f/(2.0f*(float)M_PI*freq_cut)),0.0f,1.0f);
+    static float roll_target_filtered = 0.0f;
+    static float pitch_target_filtered = 0.0f;
+
+    roll_target_filtered  += alpha * ( _roll_target -  roll_target_filtered);
+    pitch_target_filtered += alpha * (_pitch_target - pitch_target_filtered);
+    _roll_target  = roll_target_filtered;
+    _pitch_target = pitch_target_filtered;
+
 }
 
 // get_lean_angles_to_accel - convert roll, pitch lean angles to lat/lon frame accelerations in cm/s/s

@@ -10,11 +10,24 @@
 class AP_Baro
 {
 public:
-    bool                    healthy;
+    AP_Baro() :
+        _last_update(0),
+        _pressure_samples(0),
+        _altitude(0.0f),
+        _last_altitude_EAS2TAS(0.0f),
+        _EAS2TAS(0.0f),
+        _last_altitude_t(0),
+        _last_external_temperature_ms(0)
+    {
+        // initialise flags
+        _flags.healthy = false;
+        _flags.alt_ok = false;
 
-    AP_Baro() {
 		AP_Param::setup_object_defaults(this, var_info);
     }
+
+    // healthy - returns true if sensor and derived altitude are good
+    bool healthy() const { return _flags.healthy && _flags.alt_ok; }
 
     virtual bool            init()=0;
     virtual uint8_t         read() = 0;
@@ -23,7 +36,7 @@ public:
     virtual float           get_pressure() = 0;
 
     // temperature in degrees C
-    virtual float           get_temperature() = 0;
+    virtual float           get_temperature() const = 0;
 
     // accumulate a reading - overridden in some drivers
     virtual void            accumulate(void) {}
@@ -43,7 +56,7 @@ public:
 
     // get altitude difference in meters relative given a base
     // pressure in Pascal
-    float        get_altitude_difference(float base_pressure, float pressure);
+    float get_altitude_difference(float base_pressure, float pressure) const;
 
     // get scale factor required to convert equivalent to true airspeed
     float        get_EAS2TAS(void);
@@ -70,23 +83,40 @@ public:
         return _ground_pressure.get();
     }
 
+    // set the temperature to be used for altitude calibration. This
+    // allows an external temperature source (such as a digital
+    // airspeed sensor) to be used as the temperature source
+    void set_external_temperature(float temperature);
+
     // get last time sample was taken (in ms)
     uint32_t        get_last_update() const { return _last_update; };
 
     static const struct AP_Param::GroupInfo        var_info[];
 
 protected:
+
+    struct Baro_flags {
+        uint8_t healthy :1;             // true if sensor is healthy
+        uint8_t alt_ok  :1;             // true if calculated altitude is ok
+    } _flags;
+
     uint32_t                            _last_update; // in ms
     uint8_t                             _pressure_samples;
 
 private:
+    // get the temperature to be used for altitude calibration
+    float                               get_calibration_temperature(void) const;
+
+
     AP_Float                            _ground_temperature;
     AP_Float                            _ground_pressure;
     AP_Int8                             _alt_offset;
     float                               _altitude;
     float                               _last_altitude_EAS2TAS;
     float                               _EAS2TAS;
+    float                               _external_temperature;
     uint32_t                            _last_altitude_t;
+    uint32_t                            _last_external_temperature_ms;
     DerivativeFilterFloat_Size7         _climb_rate_filter;
 };
 

@@ -51,7 +51,6 @@
 //////////////////////////////////////////////////////////////////////////////
 // sensor types
 
-#define CONFIG_INS_TYPE HAL_INS_DEFAULT
 #define CONFIG_BARO     HAL_BARO_DEFAULT
 #define CONFIG_COMPASS  HAL_COMPASS_DEFAULT
 
@@ -69,8 +68,6 @@
 #if HIL_MODE != HIL_MODE_DISABLED       // we are in HIL mode
  #undef CONFIG_BARO
  #define CONFIG_BARO HAL_BARO_HIL
- #undef CONFIG_INS_TYPE
- #define CONFIG_INS_TYPE HAL_INS_HIL
  #undef  CONFIG_COMPASS
  #define CONFIG_COMPASS HAL_COMPASS_HIL
 #endif
@@ -121,6 +118,19 @@
 #ifndef SERIAL2_BAUD
 # define SERIAL2_BAUD			 57600
 #endif
+
+//////////////////////////////////////////////////////////////////////////////
+// FrSky telemetry support
+//
+
+#ifndef FRSKY_TELEM_ENABLED
+#if CONFIG_HAL_BOARD == HAL_BOARD_APM1 || CONFIG_HAL_BOARD == HAL_BOARD_APM2
+ # define FRSKY_TELEM_ENABLED DISABLED
+#else
+ # define FRSKY_TELEM_ENABLED ENABLED
+#endif
+#endif
+
 
 #ifndef CH7_OPTION
 # define CH7_OPTION		          CH7_SAVE_WP

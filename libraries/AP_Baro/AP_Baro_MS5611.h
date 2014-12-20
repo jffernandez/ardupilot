@@ -6,7 +6,7 @@
 #include <AP_HAL.h>
 #include "AP_Baro.h"
 
-#if CONFIG_HAL_BOARD != HAL_BOARD_APM2
+#if CONFIG_HAL_BOARD != HAL_BOARD_APM2 && CONFIG_HAL_BOARD != HAL_BOARD_APM1
 #define MS5611_WITH_I2C 1
 #else
 #define MS5611_WITH_I2C 0
@@ -86,7 +86,7 @@ public:
     bool            init();
     uint8_t         read();
     float           get_pressure(); // in mbar*100 units
-    float           get_temperature(); // in celsius degrees
+    float           get_temperature() const; // in celsius degrees
 
 
     /* Serial port drivers to pass to "init". */

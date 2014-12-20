@@ -16,6 +16,7 @@
 #include <AP_HAL_Empty.h>
 #include <AP_Math.h>
 #include <AP_Param.h>
+#include <StorageManager.h>
 #include <AP_ADC.h>
 #include <AP_InertialSensor.h>
 #include <AP_Notify.h>
@@ -25,6 +26,8 @@
 #include <DataFlash.h>
 #include <GCS_MAVLink.h>
 #include <AP_Mission.h>
+#include <StorageManager.h>
+#include <AP_Terrain.h>
 #include <AP_AHRS.h>
 #include <AP_Airspeed.h>
 #include <AP_Vehicle.h>
@@ -33,28 +36,12 @@
 #include <AP_Declination.h>
 #include <AP_NavEKF.h>
 #include <AP_HAL_Linux.h>
+#include <AP_Rally.h>
+#include <AP_Scheduler.h>
 
 const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 
-#define CONFIG_INS_TYPE HAL_INS_DEFAULT
-
-#if CONFIG_INS_TYPE == HAL_INS_MPU6000
-AP_InertialSensor_MPU6000 ins;
-#elif CONFIG_INS_TYPE == HAL_INS_PX4
-AP_InertialSensor_PX4 ins;
-#elif CONFIG_INS_TYPE == HAL_INS_VRBRAIN
-AP_InertialSensor_VRBRAIN ins;
-#elif CONFIG_INS_TYPE == HAL_INS_HIL
-AP_InertialSensor_HIL ins;
-#elif CONFIG_INS_TYPE == HAL_INS_FLYMAPLE
-AP_InertialSensor_Flymaple ins;
-#elif CONFIG_INS_TYPE == HAL_INS_L3G4200D
-AP_InertialSensor_L3G4200D ins;
-#elif CONFIG_INS_TYPE == HAL_INS_MPU9250
-AP_InertialSensor_MPU9250 ins;
-#else
-  #error Unrecognised CONFIG_INS_TYPE setting.
-#endif // CONFIG_INS_TYPE
+AP_InertialSensor ins;
 
 void setup(void)
 {
@@ -205,7 +192,7 @@ void run_test()
     while( !hal.console->available() ) {
 
         // wait until we have a sample
-        ins.wait_for_sample(1000);
+        ins.wait_for_sample();
 
         // read samples from ins
         ins.update();

@@ -38,13 +38,14 @@
 #define ABIAS_PNOISE_DEFAULT    0.0001f
 #define MAGE_PNOISE_DEFAULT     0.0003f
 #define MAGB_PNOISE_DEFAULT     0.0003f
-#define VEL_GATE_DEFAULT        2
+#define VEL_GATE_DEFAULT        6
 #define POS_GATE_DEFAULT        10
-#define HGT_GATE_DEFAULT        5
+#define HGT_GATE_DEFAULT        10
 #define MAG_GATE_DEFAULT        3
 #define MAG_CAL_DEFAULT         1
 #define GLITCH_ACCEL_DEFAULT    150
 #define GLITCH_RADIUS_DEFAULT   15
+#define FLOW_MEAS_DELAY         10
 
 #elif APM_BUILD_TYPE(APM_BUILD_APMrover2)
 // rover defaults
@@ -59,13 +60,14 @@
 #define ABIAS_PNOISE_DEFAULT    0.0002f
 #define MAGE_PNOISE_DEFAULT     0.0003f
 #define MAGB_PNOISE_DEFAULT     0.0003f
-#define VEL_GATE_DEFAULT        2
+#define VEL_GATE_DEFAULT        6
 #define POS_GATE_DEFAULT        10
-#define HGT_GATE_DEFAULT        5
+#define HGT_GATE_DEFAULT        10
 #define MAG_GATE_DEFAULT        3
 #define MAG_CAL_DEFAULT         1
 #define GLITCH_ACCEL_DEFAULT    150
 #define GLITCH_RADIUS_DEFAULT   15
+#define FLOW_MEAS_DELAY         25
 
 #else
 // generic defaults (and for plane)
@@ -75,18 +77,19 @@
 #define ALT_NOISE_DEFAULT       0.5f
 #define MAG_NOISE_DEFAULT       0.05f
 #define GYRO_PNOISE_DEFAULT     0.015f
-#define ACC_PNOISE_DEFAULT      0.25f
+#define ACC_PNOISE_DEFAULT      0.5f
 #define GBIAS_PNOISE_DEFAULT    1E-06f
 #define ABIAS_PNOISE_DEFAULT    0.0002f
 #define MAGE_PNOISE_DEFAULT     0.0003f
 #define MAGB_PNOISE_DEFAULT     0.0003f
-#define VEL_GATE_DEFAULT        2
+#define VEL_GATE_DEFAULT        6
 #define POS_GATE_DEFAULT        10
-#define HGT_GATE_DEFAULT        10
+#define HGT_GATE_DEFAULT        20
 #define MAG_GATE_DEFAULT        3
 #define MAG_CAL_DEFAULT         0
 #define GLITCH_ACCEL_DEFAULT    150
 #define GLITCH_RADIUS_DEFAULT   15
+#define FLOW_MEAS_DELAY         25
 
 #endif // APM_BUILD_DIRECTORY
 
@@ -95,12 +98,12 @@ extern const AP_HAL::HAL& hal;
 
 #define earthRate 0.000072921f // earth rotation rate (rad/sec)
 
-// maximum value for any element in the covariance matrix
-#define EKF_COVARIENCE_MAX 1.0e8f
-
 // when the wind estimation first starts with no airspeed sensor,
 // assume 3m/s to start
 #define STARTUP_WIND_SPEED 3.0f
+
+// initial gyro bias uncertainty (deg/sec)
+#define INIT_GYRO_BIAS_UNCERTAINTY 0.1f
 
 // Define tuning parameters
 const AP_Param::GroupInfo NavEKF::var_info[] PROGMEM = {
@@ -108,173 +111,173 @@ const AP_Param::GroupInfo NavEKF::var_info[] PROGMEM = {
     // @Param: VELNE_NOISE
     // @DisplayName: GPS horizontal velocity measurement noise (m/s)
     // @Description: This is the RMS value of noise in the North and East GPS velocity measurements. Increasing it reduces the weighting on these measurements.
-    // @Range: 0.05 - 5.0
+    // @Range: 0.05 5.0
     // @Increment: 0.05
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("VELNE_NOISE",    0, NavEKF, _gpsHorizVelNoise, VELNE_NOISE_DEFAULT),
 
     // @Param: VELD_NOISE
     // @DisplayName: GPS vertical velocity measurement noise (m/s)
     // @Description: This is the RMS value of noise in the vertical GPS velocity measurement. Increasing it reduces the weighting on this measurement.
-    // @Range: 0.05 - 5.0
+    // @Range: 0.05 5.0
     // @Increment: 0.05
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("VELD_NOISE",    1, NavEKF, _gpsVertVelNoise, VELD_NOISE_DEFAULT),
 
     // @Param: POSNE_NOISE
     // @DisplayName: GPS horizontal position measurement noise (m)
     // @Description: This is the RMS value of noise in the GPS horizontal position measurements. Increasing it reduces the weighting on these measurements.
-    // @Range: 0.1 - 10.0
+    // @Range: 0.1 10.0
     // @Increment: 0.1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("POSNE_NOISE",    2, NavEKF, _gpsHorizPosNoise, POSNE_NOISE_DEFAULT),
 
     // @Param: ALT_NOISE
     // @DisplayName: Altitude measurement noise (m)
     // @Description: This is the RMS value of noise in the altitude measurement. Increasing it reduces the weighting on this measurement.
-    // @Range: 0.1 - 10.0
+    // @Range: 0.1 10.0
     // @Increment: 0.1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("ALT_NOISE",    3, NavEKF, _baroAltNoise, ALT_NOISE_DEFAULT),
 
     // @Param: MAG_NOISE
     // @DisplayName: Magnetometer measurement noise (Gauss)
     // @Description: This is the RMS value of noise in magnetometer measurements. Increasing it reduces the weighting on these measurements.
-    // @Range: 0.01 - 0.5
+    // @Range: 0.01 0.5
     // @Increment: 0.01
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("MAG_NOISE",    4, NavEKF, _magNoise, MAG_NOISE_DEFAULT),
 
     // @Param: EAS_NOISE
     // @DisplayName: Equivalent airspeed measurement noise (m/s)
     // @Description: This is the RMS value of noise in magnetometer measurements. Increasing it reduces the weighting on these measurements.
-    // @Range: 0.5 - 5.0
+    // @Range: 0.5 5.0
     // @Increment: 0.1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("EAS_NOISE",    5, NavEKF, _easNoise, 1.4f),
 
     // @Param: WIND_PNOISE
     // @DisplayName: Wind velocity process noise (m/s^2)
     // @Description: This noise controls the growth of wind state error estimates. Increasing it makes wind estimation faster and noisier.
-    // @Range: 0.01 - 1.0
+    // @Range: 0.01 1.0
     // @Increment: 0.1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("WIND_PNOISE",    6, NavEKF, _windVelProcessNoise, 0.1f),
 
     // @Param: WIND_PSCALE
     // @DisplayName: Height rate to wind procss noise scaler
     // @Description: Increasing this parameter increases how rapidly the wind states adapt when changing altitude, but does make wind speed estimation noiser.
-    // @Range: 0.0 - 1.0
+    // @Range: 0.0 1.0
     // @Increment: 0.1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("WIND_PSCALE",    7, NavEKF, _wndVarHgtRateScale, 0.5f),
 
     // @Param: GYRO_PNOISE
     // @DisplayName: Rate gyro noise (rad/s)
     // @Description: This noise controls the growth of estimated error due to gyro measurement errors excluding bias. Increasing it makes the flter trust the gyro measurements less and other measurements more.
-    // @Range: 0.001 - 0.05
+    // @Range: 0.001 0.05
     // @Increment: 0.001
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("GYRO_PNOISE",    8, NavEKF, _gyrNoise, GYRO_PNOISE_DEFAULT),
 
     // @Param: ACC_PNOISE
     // @DisplayName: Accelerometer noise (m/s^2)
     // @Description: This noise controls the growth of estimated error due to accelerometer measurement errors excluding bias. Increasing it makes the flter trust the accelerometer measurements less and other measurements more.
-    // @Range: 0.05 - 1.0    AP_Float _gpsNEVelVarAccScale;  // scale factor applied to NE velocity measurement variance due to Vdot
+    // @Range: 0.05 1.0
     // @Increment: 0.01
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("ACC_PNOISE",    9, NavEKF, _accNoise, ACC_PNOISE_DEFAULT),
 
     // @Param: GBIAS_PNOISE
     // @DisplayName: Rate gyro bias process noise (rad/s)
     // @Description: This noise controls the growth of gyro bias state error estimates. Increasing it makes rate gyro bias estimation faster and noisier.
-    // @Range: 0.0000001 - 0.00001
-    // @User: advanced
+    // @Range: 0.0000001 0.00001
+    // @User: Advanced
     AP_GROUPINFO("GBIAS_PNOISE",    10, NavEKF, _gyroBiasProcessNoise, GBIAS_PNOISE_DEFAULT),
 
     // @Param: ABIAS_PNOISE
     // @DisplayName: Accelerometer bias process noise (m/s^2)
     // @Description: This noise controls the growth of the vertical acelerometer bias state error estimate. Increasing it makes accelerometer bias estimation faster and noisier.
-    // @Range: 0.00001 - 0.001
-    // @User: advanced
+    // @Range: 0.00001 0.001
+    // @User: Advanced
     AP_GROUPINFO("ABIAS_PNOISE",    11, NavEKF, _accelBiasProcessNoise, ABIAS_PNOISE_DEFAULT),
 
     // @Param: MAGE_PNOISE
     // @DisplayName: Earth magnetic field process noise (gauss/s)
     // @Description: This noise controls the growth of earth magnetic field state error estimates. Increasing it makes earth magnetic field bias estimation faster and noisier.
-    // @Range: 0.0001 - 0.01
-    // @User: advanced
+    // @Range: 0.0001 0.01
+    // @User: Advanced
     AP_GROUPINFO("MAGE_PNOISE",    12, NavEKF, _magEarthProcessNoise, MAGE_PNOISE_DEFAULT),
 
     // @Param: MAGB_PNOISE
     // @DisplayName: Body magnetic field process noise (gauss/s)
     // @Description: This noise controls the growth of body magnetic field state error estimates. Increasing it makes compass offset estimation faster and noisier.
-    // @Range: 0.0001 - 0.01
-    // @User: advanced
+    // @Range: 0.0001 0.01
+    // @User: Advanced
     AP_GROUPINFO("MAGB_PNOISE",    13, NavEKF, _magBodyProcessNoise, MAGB_PNOISE_DEFAULT),
 
     // @Param: VEL_DELAY
     // @DisplayName: GPS velocity measurement delay (msec)
     // @Description: This is the number of msec that the GPS velocity measurements lag behind the inertial measurements.
-    // @Range: 0 - 500
+    // @Range: 0 500
     // @Increment: 10
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("VEL_DELAY",    14, NavEKF, _msecVelDelay, 220),
 
     // @Param: POS_DELAY
     // @DisplayName: GPS position measurement delay (msec)
     // @Description: This is the number of msec that the GPS position measurements lag behind the inertial measurements.
-    // @Range: 0 - 500
+    // @Range: 0 500
     // @Increment: 10
-    // @User: advancedScale factor applied to horizontal position measurement variance due to manoeuvre acceleration
+    // @User: Advanced
     AP_GROUPINFO("POS_DELAY",    15, NavEKF, _msecPosDelay, 220),
 
     // @Param: GPS_TYPE
     // @DisplayName: GPS velocity mode control
-    // @Description: This parameter controls use of GPS velocity measurements : 0 = use 3D velocity, 1 = use 2D velocity, 2 = use no velocity
-    // @Range: 0 - 3
+    // @Description: This parameter controls use of GPS velocity measurements : 0 = use 3D velocity, 1 = use 2D velocity, 2 = use no velocity, 3 = use no GPS
+    // @Range: 0 3
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("GPS_TYPE",    16, NavEKF, _fusionModeGPS, 0),
 
     // @Param: VEL_GATE
     // @DisplayName: GPS velocity measurement gate size
     // @Description: This parameter sets the number of standard deviations applied to the GPS velocity measurement innovation consistency check. Decreasing it makes it more likely that good measurements willbe rejected. Increasing it makes it more likely that bad measurements will be accepted.
-    // @Range: 1 - 100
+    // @Range: 1 100
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("VEL_GATE",    17, NavEKF, _gpsVelInnovGate, VEL_GATE_DEFAULT),
 
     // @Param: POS_GATE
     // @DisplayName: GPS position measurement gate size
     // @Description: This parameter sets the number of standard deviations applied to the GPS position measurement innovation consistency check. Decreasing it makes it more likely that good measurements will be rejected. Increasing it makes it more likely that bad measurements will be accepted.
-    // @Range: 1 - 100
+    // @Range: 1 100
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("POS_GATE",    18, NavEKF, _gpsPosInnovGate, POS_GATE_DEFAULT),
 
     // @Param: HGT_GATE
     // @DisplayName: Height measurement gate size
     // @Description: This parameter sets the number of standard deviations applied to the height measurement innovation consistency check. Decreasing it makes it more likely that good measurements will be rejected. Increasing it makes it more likely that bad measurements will be accepted.
-    // @Range: 1 - 100
+    // @Range: 1 100
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("HGT_GATE",    19, NavEKF, _hgtInnovGate, HGT_GATE_DEFAULT),
 
     // @Param: MAG_GATE
     // @DisplayName: Magnetometer measurement gate size
     // @Description: This parameter sets the number of standard deviations applied to the magnetometer measurement innovation consistency check. Decreasing it makes it more likely that good measurements will be rejected. Increasing it makes it more likely that bad measurements will be accepted.
-    // @Range: 1 - 100
+    // @Range: 1 100
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("MAG_GATE",    20, NavEKF, _magInnovGate, MAG_GATE_DEFAULT),
 
     // @Param: EAS_GATE
     // @DisplayName: Airspeed measurement gate size
     // @Description: This parameter sets the number of standard deviations applied to the airspeed measurement innovation consistency check. Decreasing it makes it more likely that good measurements will be rejected. Increasing it makes it more likely that bad measurements will be accepted.
-    // @Range: 1 - 100
+    // @Range: 1 100
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("EAS_GATE",    21, NavEKF, _tasInnovGate, 10),
 
     // @Param: MAG_CAL
@@ -282,24 +285,79 @@ const AP_Param::GroupInfo NavEKF::var_info[] PROGMEM = {
     // @Description: EKF_MAG_CAL = 0 enables calibration based on flying speed and altitude and is the default setting for Plane users. EKF_MAG_CAL = 1 enables calibration based on manoeuvre level and is the default setting for Copter and Rover users. EKF_MAG_CAL = 2 prevents magnetometer calibration regardless of flight condition and is recommended if in-flight magnetometer calibration is unreliable.
     // @Values: 0:Speed and Height,1:Acceleration,2:Never
     // @Increment: 1
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("MAG_CAL",    22, NavEKF, _magCal, MAG_CAL_DEFAULT),
 
     // @Param: GLITCH_ACCEL
     // @DisplayName: GPS glitch accel gate size (cm/s^2)
     // @Description: This parameter controls the maximum amount of difference in horizontal acceleration between the value predicted by the filter and the value measured by the GPS before the GPS position data is rejected. If this value is set too low, then valid GPS data will be regularly discarded, and the position accuracy will degrade. If this parameter is set too high, then large GPS glitches will cause large rapid changes in position.
-    // @Range: 100 - 500
+    // @Range: 100 500
     // @Increment: 50
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("GLITCH_ACCEL",    23, NavEKF, _gpsGlitchAccelMax, GLITCH_ACCEL_DEFAULT),
 
     // @Param: GLITCH_RAD
     // @DisplayName: GPS glitch radius gate size (m)
     // @Description: This parameter controls the maximum amount of difference in horizontal position (in m) between the value predicted by the filter and the value measured by the GPS before the long term glitch protection logic is activated and an offset is applied to the GPS measurement to compensate. Position steps smaller than this value will be temporarily ignored, but will then be accepted and the filter will move to the new position. Position steps larger than this value will be ignored initially, but the filter will then apply an offset to the GPS position measurement.
-    // @Range: 10 - 50
+    // @Range: 10 50
     // @Increment: 5
-    // @User: advanced
+    // @User: Advanced
     AP_GROUPINFO("GLITCH_RAD",    24, NavEKF, _gpsGlitchRadiusMax, GLITCH_RADIUS_DEFAULT),
+
+    // @Param: GND_GRADIENT
+    // @DisplayName: Terrain Gradient % RMS
+    // @Description: This parameter sets the RMS terrain gradient percentage assumed by the terrain height estimation. Terrain height can be estimated using optical flow and/or range finder sensor data if fitted. Smaller values cause the terrain height estimate to be slower to respond to changes in measurement. Larger values casue the terrain height estimate to be faster to respond, but also more noisy. Generally this value can be reduced if operating over very flat terrain and increased if operating over uneven terrain.
+    // @Range: 1 - 50
+    // @Increment: 1
+    // @User: advanced
+    AP_GROUPINFO("GND_GRADIENT",    25, NavEKF, _gndGradientSigma, 2),
+
+    // @Param: FLOW_NOISE
+    // @DisplayName: Optical flow measurement noise (rad/s)
+    // @Description: This is the RMS value of noise and errors in optical flow measurements. Increasing it reduces the weighting on these measurements.
+    // @Range: 0.05 - 1.0
+    // @Increment: 0.05
+    // @User: advanced
+    AP_GROUPINFO("FLOW_NOISE",    26, NavEKF, _flowNoise, 0.3f),
+
+    // @Param: FLOW_GATE
+    // @DisplayName: Optical Flow measurement gate size
+    // @Description: This parameter sets the number of standard deviations applied to the optical flow innovation consistency check. Decreasing it makes it more likely that good measurements will be rejected. Increasing it makes it more likely that bad measurements will be accepted.
+    // @Range: 1 - 100
+    // @Increment: 1
+    // @User: advanced
+    AP_GROUPINFO("FLOW_GATE",    27, NavEKF, _flowInnovGate, 3),
+
+    // @Param: FLOW_DELAY
+    // @DisplayName: Optical Flow measurement delay (msec)
+    // @Description: This is the number of msec that the optical flow measurements lag behind the inertial measurements. It is the time from the end of the optical flow averaging period and does not include the time delay due to the 100msec of averaging within the flow sensor.
+    // @Range: 0 - 500
+    // @Increment: 10
+    // @User: advanced
+    AP_GROUPINFO("FLOW_DELAY",    28, NavEKF, _msecFLowDelay, FLOW_MEAS_DELAY),
+
+    // @Param: RNG_GATE
+    // @DisplayName: Range finder measurement gate size
+    // @Description: This parameter sets the number of standard deviations applied to the range finder innovation consistency check. Decreasing it makes it more likely that good measurements will be rejected. Increasing it makes it more likely that bad measurements will be accepted.
+    // @Range: 1 - 100
+    // @Increment: 1
+    // @User: advanced
+    AP_GROUPINFO("RNG_GATE",    29, NavEKF, _rngInnovGate, 5),
+
+    // @Param: MAX_FLOW
+    // @DisplayName: Maximum valid optical flow rate
+    // @Description: This parameter sets the magnitude maximum optical flow rate in rad/sec that will be accepted by the filter
+    // @Range: 1.0 - 4.0
+    // @Increment: 0.1
+    // @User: advanced
+    AP_GROUPINFO("MAX_FLOW",    30, NavEKF, _maxFlowRate, 2.5f),
+
+    // @Param: FALLBACK
+    // @DisplayName: Fallback strictness
+    // @Description: This parameter controls the conditions necessary to trigger a fallback to DCM and INAV. A value of 1 will cause fallbacks to occur on loss of GPS and other conditions. A value of 0 will trust the EKF more.
+    // @Values: 0:Trust EKF more, 1:Trust DCM more
+    // @User: Advanced
+    AP_GROUPINFO("FALLBACK",    31, NavEKF, _fallback, 1),
 
     AP_GROUPEND
 };
@@ -310,10 +368,11 @@ NavEKF::NavEKF(const AP_AHRS *ahrs, AP_Baro &baro) :
     _ahrs(ahrs),
     _baro(baro),
     state(*reinterpret_cast<struct state_elements *>(&states)),
+    onGround(true),             // initialise assuming we are on ground
+    manoeuvring(false),         // initialise assuming we are not maneouvring
     covTimeStepMax(0.07f),      // maximum time (sec) between covariance prediction updates
     covDelAngMax(0.05f),        // maximum delta angle between covariance prediction updates
     TASmsecMax(200),            // maximum allowed interval between airspeed measurement updates
-    fuseMeNow(false),           // forces airspeed and sythetic sideslip fusion to occur on the IMU frame that data arrives
     staticMode(true),           // staticMode forces position and velocity fusion with zero values
     prevStaticMode(true),       // staticMode from previous filter update
     yawAligned(false),          // set true when heading or yaw angle has been aligned
@@ -337,24 +396,32 @@ NavEKF::NavEKF(const AP_AHRS *ahrs, AP_Baro &baro) :
     _msecHgtDelay           = 60;       // Height measurement delay (msec)
     _msecMagDelay           = 40;       // Magnetometer measurement delay (msec)
     _msecTasDelay           = 240;      // Airspeed measurement delay (msec)
-    _gpsRetryTimeUseTAS     = 20000;    // GPS retry time with airspeed measurements (msec)
+    _gpsRetryTimeUseTAS     = 10000;    // GPS retry time with airspeed measurements (msec)
     _gpsRetryTimeNoTAS      = 10000;    // GPS retry time without airspeed measurements (msec)
     _hgtRetryTimeMode0      = 10000;    // Height retry time with vertical velocity measurement (msec)
     _hgtRetryTimeMode12     = 5000;     // Height retry time without vertical velocity measurement (msec)
-    _magFailTimeLimit_ms    = 10000;     // number of msec before a magnetometer failing innovation consistency checks is declared failed (msec)
+    _magFailTimeLimit_ms    = 10000;    // number of msec before a magnetometer failing innovation consistency checks is declared failed (msec)
     _magVarRateScale        = 0.05f;    // scale factor applied to magnetometer variance due to angular rate
     _gyroBiasNoiseScaler    = 2.0f;     // scale factor applied to gyro bias state process noise when on ground
     _msecGpsAvg             = 200;      // average number of msec between GPS measurements
     _msecHgtAvg             = 100;      // average number of msec between height measurements
+    _msecMagAvg             = 100;      // average number of msec between magnetometer measurements
     _msecBetaAvg            = 100;      // average number of msec between synthetic sideslip measurements
-    dtVelPos                = 0.02;     // number of seconds between position and velocity corrections. This should be a multiple of the imu update interval.
+    _msecBetaMax            = 200;      // maximum number of msec between synthetic sideslip measurements
+    _msecFlowAvg            = 100;      // average number of msec between optical flow measurements
+    dtVelPos                = 0.2;      // number of seconds between position and velocity corrections. This should be a multiple of the imu update interval.
+
     // Misc initial conditions
     hgtRate = 0.0f;
     mag_state.q0 = 1;
     mag_state.DCM.identity();
     IMU1_weighting = 0.5f;
-    lastDivergeTime_ms = 0;
     memset(&faultStatus, 0, sizeof(faultStatus));
+    // variables added for optical flow fusion
+    DCM33FlowMin = 0.71f;           // If Tbn(3,3) is less than this number, optical flow measurements will not be fused as tilt is too high.
+    fScaleFactorPnoise = 1e-10f;    // Process noise added to focal length scale factor state variance at each time step
+    flowTimeDeltaAvg_ms = 100;      // average interval between optical flow measurements (msec)
+    flowIntervalMax_ms = 200;       // maximum allowable time between flow fusion events
 }
 
 // Check basic filter health metrics and return a consolidated health status
@@ -369,13 +436,16 @@ bool NavEKF::healthy(void) const
     if (state.velocity.is_nan()) {
         return false;
     }
-    if (filterDiverged || (hal.scheduler->millis() - lastDivergeTime_ms < 10000)) {
+    if (_fallback && velTestRatio > 1 && posTestRatio > 1 && hgtTestRatio > 1) {
+        // all three metrics being above 1 means the filter is
+        // extremely unhealthy.
         return false;
     }
+
     // If measurements have failed innovation consistency checks for long enough to time-out
     // and force fusion then the nav solution can be conidered to be unhealthy
     // This will only be set as a transient
-    if (posTimeout || velTimeout || hgtTimeout) {
+    if (_fallback && (posTimeout || velTimeout || hgtTimeout)) {
         return false;
     }
 
@@ -401,42 +471,45 @@ bool NavEKF::PositionDrifting(void) const
 void NavEKF::ResetPosition(void)
 {
     if (staticMode) {
-        states[7] = 0;
-        states[8] = 0;
+        state.position.x = 0;
+        state.position.y = 0;
     } else if (_ahrs->get_gps().status() >= AP_GPS::GPS_OK_FIX_3D) {
 
         // read the GPS
         readGpsData();
-        // write to state vector
-        states[7] = gpsPosNE.x + gpsPosGlitchOffsetNE.x;
-        states[8] = gpsPosNE.y + gpsPosGlitchOffsetNE.y;
+        // write to state vector and compensate for GPS latency
+        state.position.x = gpsPosNE.x + gpsPosGlitchOffsetNE.x + 0.001f*velNED.x*float(_msecPosDelay);
+        state.position.y = gpsPosNE.y + gpsPosGlitchOffsetNE.y + 0.001f*velNED.y*float(_msecPosDelay);
+    }
+    // stored horizontal position states to prevent subsequent GPS measurements from being rejected
+    for (uint8_t i=0; i<=49; i++){
+        storedStates[i].position[0] = state.position[0];
+        storedStates[i].position[1] = state.position[1];
     }
 }
 
-// resets velocity states to last GPS measurement or to zero if in static mode
+// Reset velocity states to last GPS measurement if available or to zero if in static mode
+// Do not reset vertical velocity using GPS as there is baro alt available to constrain drift
 void NavEKF::ResetVelocity(void)
 {
     if (staticMode) {
          state.velocity.zero();
          state.vel1.zero();
          state.vel2.zero();
-    } else if (_ahrs->get_gps().status() >= AP_GPS::GPS_OK_FIX_3D) {
+    } else if (_ahrs->get_gps().status() >= AP_GPS::GPS_OK_FIX_3D && _fusionModeGPS <= 1) {
         // read the GPS
         readGpsData();
         // reset horizontal velocity states
-        if (_fusionModeGPS <= 1) {
-            states[4]  = velNED[0]; // north velocity from blended accel data
-            states[5]  = velNED[1]; // east velocity from blended accel data
-            states[23] = velNED[0]; // north velocity from IMU1 accel data
-            states[24] = velNED[1]; // east velocity from IMU1 accel data
-            states[27] = velNED[0]; // north velocity from IMU2 accel data
-            states[28] = velNED[1]; // east velocity from IMU2 accel data
-        }
-        // reset vertical velocity states
-        if (_fusionModeGPS <= 0) {
-            states[6]  = velNED[2]; // down velocity from blended accel data
-            states[25] = velNED[2]; // down velocity from IMU1 accel data
-            states[29] = velNED[2]; // down velocity from IMU2 accel data
+        state.velocity.x  = velNED.x; // north velocity from blended accel data
+        state.velocity.y  = velNED.y; // east velocity from blended accel data
+        state.vel1.x      = velNED.x; // north velocity from IMU1 accel data
+        state.vel1.y      = velNED.y; // east velocity from IMU1 accel data
+        state.vel2.x      = velNED.x; // north velocity from IMU2 accel data
+        state.vel2.y      = velNED.y; // east velocity from IMU2 accel data
+        // over write stored horizontal velocity states to prevent subsequent GPS measurements from being rejected
+        for (uint8_t i=0; i<=49; i++){
+            storedStates[i].velocity.x = velNED.x;
+            storedStates[i].velocity.y = velNED.y;
         }
     }
 }
@@ -447,9 +520,14 @@ void NavEKF::ResetHeight(void)
     // read the altimeter
     readHgtData();
     // write to the state vector
-    states[9]   = -hgtMea; // down position from blended accel data
+    state.position.z = -hgtMea; // down position from blended accel data
     state.posD1 = -hgtMea; // down position from IMU1 accel data
     state.posD2 = -hgtMea; // down position from IMU2 accel data
+    // reset stored vertical position states to prevent subsequent GPS measurements from being rejected
+    for (uint8_t i=0; i<=49; i++){
+        storedStates[i].position.z = -hgtMea;
+    }
+    flowStates[1] = states[9] + 0.1f;
 }
 
 // this function is used to initialise the filter whilst moving, using the AHRS DCM solution
@@ -464,14 +542,29 @@ void NavEKF::InitialiseFilterDynamic(void)
     ZeroVariables();
 
     // get initial time deltat between IMU measurements (sec)
-    dtIMU = _ahrs->get_ins().get_delta_time();
+    dtIMU = constrain_float(_ahrs->get_ins().get_delta_time(),0.001f,1.0f);
+    dtIMUinv = 1.0f / dtIMU;
+
+    // If we have a high rate update step of >100 Hz, then there may not be enough time to do all the fusion steps at once, so load levelling is used
+    if (dtIMU < 0.009f) {
+        inhibitLoadLeveling = false;
+    } else {
+        inhibitLoadLeveling = true;
+    }
+    // set number of updates over which gps and baro measurements are applied to the velocity and position states
+    gpsUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecGpsAvg);
+    gpsUpdateCountMax = uint8_t(1.0f/gpsUpdateCountMaxInv);
+    hgtUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecHgtAvg);
+    hgtUpdateCountMax = uint8_t(1.0f/hgtUpdateCountMaxInv);
+    magUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecMagAvg);
+    magUpdateCountMax = uint8_t(1.0f/magUpdateCountMaxInv);
+    flowUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecFlowAvg);
+    flowUpdateCountMax = uint8_t(1.0f/flowUpdateCountMaxInv);
 
     // calculate initial orientation and earth magnetic field states
-    Quaternion initQuat;
-    initQuat = calcQuatAndFieldStates(_ahrs->roll, _ahrs->pitch);
+    state.quat = calcQuatAndFieldStates(_ahrs->roll, _ahrs->pitch);
 
     // write to state vector
-    state.quat = initQuat;
     state.gyro_bias.zero();
     state.accel_zbias1 = 0;
     state.accel_zbias2 = 0;
@@ -479,7 +572,10 @@ void NavEKF::InitialiseFilterDynamic(void)
     ResetVelocity();
     ResetPosition();
     ResetHeight();
-    state.body_magfield  = magBias;
+    state.body_magfield.zero();
+
+    // set stored states to current state
+    StoreStatesReset();
 
     // set to true now that states have be initialised
     statesInitialised = true;
@@ -501,6 +597,25 @@ void NavEKF::InitialiseFilterBootstrap(void)
     // set re-used variables to zero
     ZeroVariables();
 
+    // get initial time deltat between IMU measurements (sec)
+    dtIMU = constrain_float(_ahrs->get_ins().get_delta_time(),0.001f,1.0f);
+    dtIMUinv = 1.0f / dtIMU;
+
+    // If we have a high rate update step of >100 Hz, then there may not enough time to all the fusion steps at once, so load levelling is used
+    if (dtIMU < 0.009f) {
+        inhibitLoadLeveling = false;
+    } else {
+        inhibitLoadLeveling = true;
+    }
+
+    // set number of updates over which gps and baro measurements are applied to the velocity and position states
+    gpsUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecGpsAvg);
+    gpsUpdateCountMax = uint8_t(1.0f/gpsUpdateCountMaxInv);
+    hgtUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecHgtAvg);
+    hgtUpdateCountMax = uint8_t(1.0f/hgtUpdateCountMaxInv);
+    magUpdateCountMaxInv = (dtIMU * 1000.0f)/float(_msecMagAvg);
+    magUpdateCountMax = uint8_t(1.0f/magUpdateCountMaxInv);
+
     // acceleration vector in XYZ body axes measured by the IMU (m/s^2)
     Vector3f initAccVec;
 
@@ -511,13 +626,16 @@ void NavEKF::InitialiseFilterBootstrap(void)
     readMagData();
 
     // normalise the acceleration vector
-    initAccVec.normalize();
+    float pitch=0, roll=0;
+    if (initAccVec.length() > 0.001f) {
+        initAccVec.normalize();
 
-    // calculate initial pitch angle
-    float pitch = asinf(initAccVec.x);
+        // calculate initial pitch angle
+        pitch = asinf(initAccVec.x);
 
-    // calculate initial roll angle
-    float roll = -asinf(initAccVec.y / cosf(pitch));
+        // calculate initial roll angle
+        roll = -asinf(initAccVec.y / cosf(pitch));
+    }
 
     // calculate initial orientation and earth magnetic field states
     Quaternion initQuat;
@@ -538,7 +656,10 @@ void NavEKF::InitialiseFilterBootstrap(void)
     state.accel_zbias1 = 0;
     state.accel_zbias2 = 0;
     state.wind_vel.zero();
-    state.body_magfield = magBias;
+    state.body_magfield.zero();
+
+    // set stored states to current state
+    StoreStatesReset();
 
     // set to true now we have intialised the states
     statesInitialised = true;
@@ -564,15 +685,11 @@ void NavEKF::UpdateFilter()
     // start the timer used for load measurement
     perf_begin(_perf_UpdateFilter);
 
+    //get starting time for update step
+    imuSampleTime_ms = hal.scheduler->millis();
+
     // read IMU data and convert to delta angles and velocities
     readIMUData();
-
-    // detect if filter has diverged and do a dynamic reset using the DCM solution
-    checkDivergence();
-    if (filterDiverged) {
-        InitialiseFilterDynamic();
-        return;
-    }
 
     // detect if the filter update has been delayed for too long
     if (dtIMU > 0.2f) {
@@ -592,7 +709,7 @@ void NavEKF::UpdateFilter()
     SetFlightAndFusionModes();
 
     // define rules used to set staticMode
-    // staticMode enables ground operation without GPS by fusing zeros for position and height measurements
+    // staticMode enables attitude only estimates without GPS by fusing zeros for position
     if (static_mode_demanded()) {
         staticMode = true;
     } else {
@@ -605,8 +722,26 @@ void NavEKF::UpdateFilter()
         ResetPosition();
         ResetHeight();
         StoreStatesReset();
+        // only reset the magnetic field and heading on the first arm. This prevents in-flight learning being forgotten for vehicles that do multiple short flights and disarm in-between.
+        if (!staticMode && !firstArmComplete) {
+            firstArmComplete = true;
+            state.quat = calcQuatAndFieldStates(_ahrs->roll, _ahrs->pitch);
+            firstArmPosD = state.position.z;
+        }
         calcQuatAndFieldStates(_ahrs->roll, _ahrs->pitch);
+        heldVelNE.zero();
+        // When entering static mode (dis-arming), clear the GPS inhibit mode
+        // when leaving static mode (arming) set to true if EKF user parameter is set to not use GPS
+        if (!prevStaticMode) {
+            gpsInhibitMode = 0;
+        } else if (prevStaticMode && _fusionModeGPS == 3) {
+            gpsInhibitMode = 2;
+        }
         prevStaticMode = staticMode;
+    } else if (!staticMode && !finalMagYawInit && firstArmPosD - state.position.z > 1.5f && !assume_zero_sideslip()) {
+        // Do a final yaw and earth mag field initialisation when the vehicle has gained 1.5m of altitude after arming if it is a non-fly forward vehicle (vertical takeoff)
+        state.quat = calcQuatAndFieldStates(_ahrs->roll, _ahrs->pitch);
+        finalMagYawInit = true;
     }
 
     // run the strapdown INS equations every IMU update
@@ -635,6 +770,7 @@ void NavEKF::UpdateFilter()
     // Update states using GPS, altimeter, compass, airspeed and synthetic sideslip observations
     SelectVelPosFusion();
     SelectMagFusion();
+    SelectFlowFusion();
     SelectTasFusion();
     SelectBetaFusion();
 
@@ -645,61 +781,48 @@ void NavEKF::UpdateFilter()
 // select fusion of velocity, position and height measurements
 void NavEKF::SelectVelPosFusion()
 {
-    // calculate ratio of VelPos fusion to state prediction steps
-    uint8_t velPosFuseStepRatio = floor(dtVelPos/dtIMU + 0.5f);
-
-    // calculate the scale factor to be applied to GPS measurement variance to account for
-    // the fact we repeat fusion of the same measurement to provide a smoother output
-    gpsVarScaler = _msecGpsAvg/(1000.0f*dtVelPos);
-
-    // calculate the scale factor to be applied to height measurement variance to account for
-    // the fact we repeat fusion of the same measurement to provide a smoother output
-    hgtVarScaler = _msecHgtAvg/(1000.0f*dtVelPos);
-
     // check for new data, specify which measurements should be used and check data for freshness
-    if (!staticMode) {
+    if (!staticMode && !velHoldMode) {
 
         // check for and read new GPS data
         readGpsData();
 
+        // Set GPS time-out threshold depending on whether we have an airspeed sensor to constrain drift
+        uint32_t gpsRetryTimeout = useAirspeed() ? _gpsRetryTimeUseTAS : _gpsRetryTimeNoTAS;
         // command fusion of GPS data and reset states as required
         if (newDataGps) {
             // reset data arrived flag
             newDataGps = false;
-            // enable fusion
-            fuseVelData = true;
-            fusePosData = true;
-            // reset the counter used to schedule updates so that we always fuse data on the frame GPS data arrives
-            skipCounter = velPosFuseStepRatio;
-            // If a long time since last GPS update, then reset position and velocity and reset stored state history
-
-            uint32_t gpsRetryTimeout = useAirspeed() ? _gpsRetryTimeUseTAS : _gpsRetryTimeNoTAS;
-            if (hal.scheduler->millis() - secondLastFixTime_ms > gpsRetryTimeout) {
-                ResetPosition();
-                ResetVelocity();
-                StoreStatesReset();
+            // reset state updates and counter used to spread fusion updates across several frames to reduce 10Hz pulsing
+            memset(&gpsIncrStateDelta[0], 0, sizeof(gpsIncrStateDelta));
+            gpsUpdateCount = 0;
+            // select which of velocity and position measurements will be fused
+            if (gpsInhibitMode == 0) {
+                // use both if GPS use is enabled
+                fuseVelData = true;
+                fusePosData = true;
+                // If a long time since last GPS update, then reset position and velocity and reset stored state history
+                if (imuSampleTime_ms - secondLastFixTime_ms > gpsRetryTimeout) {
+                    ResetPosition();
+                    ResetVelocity();
+                    StoreStatesReset();
+                }
+            } else {
+                fuseVelData = false;
+                fusePosData = false;
             }
-        } else if (hal.scheduler->millis() - lastFixTime_ms > (uint32_t)(_msecGpsAvg + 40)) {
-            // Timeout fusion of GPS data if stale. Needed because we repeatedly fuse the same
-            // measurement until the next one arrives to provide a smoother output
+        } else {
             fuseVelData = false;
             fusePosData = false;
+            // If we haven't received GPS data for a while and are not using optical flow, then declare the EKF position and velocity output as unhealthy
+            if ((imuSampleTime_ms - secondLastFixTime_ms > gpsRetryTimeout) && !(gpsInhibitMode == 2 && useOptFlow())) {
+                posHealth = false;
+                velHealth = false;
+                posTimeout = true;
+                velTimeout = true;
+            }
         }
-
-        // command fusion of height data
-        if (newDataHgt)
-        {
-            // reset data arrived flag
-            newDataHgt = false;
-            // enable fusion
-            fuseHgtData = true;
-        } else if (hal.scheduler->millis() - lastHgtTime_ms > (uint32_t)(_msecHgtAvg + 40)) {
-            // timeout fusion of height data if stale. Needed because we repeatedly fuse the same
-            // measurement until the next one arrives to provide a smoother output
-            fuseHgtData = false;
-        }
-
-    } else {
+    } else if (staticMode ) {
         // in static mode use synthetic position measurements set to zero
         // only fuse synthetic measurements when rate of change of velocity is less than 0.5g to reduce attitude errors due to launch acceleration
         // do not use velocity fusion to reduce the effect of movement on attitude
@@ -709,25 +832,55 @@ void NavEKF::SelectVelPosFusion()
             fusePosData = false;
         }
         fuseVelData = false;
-        fuseHgtData = true;
+    } else if (velHoldMode) {
+        // In velocity hold mode we fuse the last valid velocity vector
+        // We do not fuse when manoeuvring to avoid corrupting the attitude
+        if (accNavMag < 4.9f) {
+            fuseVelData = true;
+        } else {
+            fuseVelData = false;
+        }
+        fusePosData = false;
+    } else {
+        fuseVelData = false;
+        fusePosData = false;
     }
 
     // check for and read new height data
     readHgtData();
 
-    // perform fusion as commanded, and in accordance with specified time intervals
-    if (fuseVelData || fusePosData || fuseHgtData) {
-        // skip fusion as required to maintain ~dtVelPos time interval between corrections
-        if (skipCounter >= velPosFuseStepRatio) {
-            FuseVelPosNED();
-            // reset counter used to skip update frames
-            skipCounter = 1;
-        } else {
-            // increment counter used to skip update frames
-            skipCounter += 1;
-        }
+    // command fusion of height data
+    if (newDataHgt)
+    {
+        // reset data arrived flag
+        newDataHgt = false;
+        // reset state updates and counter used to spread fusion updates across several frames to reduce 10Hz pulsing
+        memset(&hgtIncrStateDelta[0], 0, sizeof(hgtIncrStateDelta));
+        hgtUpdateCount = 0;
+        // enable fusion
+        fuseHgtData = true;
+    } else {
+        fuseHgtData = false;
     }
 
+    // perform fusion
+    if (fuseVelData || fusePosData || fuseHgtData) {
+            FuseVelPosNED();
+    }
+
+    // Fuse corrections to quaternion, position and velocity states across several time steps to reduce 5 and 10Hz pulsing in the output
+    if (gpsUpdateCount < gpsUpdateCountMax) {
+        gpsUpdateCount ++;
+        for (uint8_t i = 0; i <= 9; i++) {
+            states[i] += gpsIncrStateDelta[i];
+        }
+    }
+    if (hgtUpdateCount < hgtUpdateCountMax) {
+        hgtUpdateCount ++;
+        for (uint8_t i = 0; i <= 9; i++) {
+            states[i] += hgtIncrStateDelta[i];
+        }
+    }
 }
 
 // select fusion of magnetometer data
@@ -736,32 +889,116 @@ void NavEKF::SelectMagFusion()
     // check for and read new magnetometer measurements
     readMagData();
 
-    // If we are using the compass and the magnetometer has been unhealthy for too long we declare it failed
+    // If we are using the compass and the magnetometer has been unhealthy for too long we declare a timeout
     if (magHealth) {
-        lastHealthyMagTime_ms = hal.scheduler->millis();
-    } else {
-        if ((hal.scheduler->millis() - lastHealthyMagTime_ms) > _magFailTimeLimit_ms && use_compass()) {
-            magTimeout = true;
-        } else {
-            magTimeout = false;
-        }
+        magTimeout = false;
+        lastHealthyMagTime_ms = imuSampleTime_ms;
+    } else if ((imuSampleTime_ms - lastHealthyMagTime_ms) > _magFailTimeLimit_ms && use_compass()) {
+        magTimeout = true;
     }
 
     // determine if conditions are right to start a new fusion cycle
     bool dataReady = statesInitialised && use_compass() && newDataMag;
     if (dataReady)
     {
-        MAGmsecPrev = IMUmsec;
         fuseMagData = true;
+        // reset state updates and counter used to spread fusion updates across several frames to reduce 10Hz pulsing
+        memset(&magIncrStateDelta[0], 0, sizeof(magIncrStateDelta));
+        magUpdateCount = 0;
     }
     else
     {
         fuseMagData = false;
     }
 
-    // call the function that performs fusion of magnetometer data
-    FuseMagnetometer();
+        // delay if covariance prediction is being performed on this prediction cycle unless load levelling is inhibited
+        if (!covPredStep || inhibitLoadLeveling) {
+            FuseMagnetometer();
+        }
 
+    // Fuse corrections to quaternion, position and velocity states across several time steps to reduce 10Hz pulsing in the output
+    if (magUpdateCount < magUpdateCountMax) {
+        magUpdateCount ++;
+        for (uint8_t i = 0; i <= 9; i++) {
+            states[i] += magIncrStateDelta[i];
+        }
+    }
+}
+
+// select fusion of optical flow measurements
+void NavEKF::SelectFlowFusion()
+{
+    // if we don't have flow measurements and are not using GPS, dead reckon using current velocity vector unless we are in static mode
+    if (!useOptFlow() && !staticMode && gpsInhibitMode == 2) {
+        velHoldMode = true;
+    } else {
+        velHoldMode = false;
+    }
+    if (velHoldMode && !lastHoldVelocity) {
+        heldVelNE.x = state.velocity.x;
+        heldVelNE.y = state.velocity.y;
+    }
+    lastHoldVelocity = velHoldMode;
+    // Apply tilt check
+    bool tiltOK = (Tnb_flow.c.z > DCM33FlowMin);
+    // if we have waited too long, set a timeout flag which will force fusion to occur regardless of load spreading
+    bool timeout = ((imuSampleTime_ms - prevFlowFusionTime_ms) >= flowIntervalMax_ms);
+    // check if fusion should be delayed to spread load. Setting fuseMeNow to true disables this load spreading feature.
+    bool delayFusion = ((covPredStep || magFusePerformed) && !(timeout || inhibitLoadLeveling));
+    // if the filter is initialised, we have data to fuse and the vehicle is not excessively tilted, then perform optical flow fusion
+    if (useOptFlow() && newDataFlow && tiltOK && !delayFusion && !staticMode)
+    {
+        // reset state updates and counter used to spread fusion updates across several frames to reduce 10Hz pulsing
+        memset(&flowIncrStateDelta[0], 0, sizeof(flowIncrStateDelta));
+        flowUpdateCount = 0;
+        // Set the flow noise used by the fusion processes
+        R_LOS = sq(max(_flowNoise, 0.05f));
+        // Fuse the optical flow X axis data into the main filter
+        flow_state.obsIndex = 0;
+        FuseOptFlow();
+        // increment the index to fuse the Y axis data on the next prediction cycle
+        flow_state.obsIndex = 1;
+        // reset flag to indicate that no new flow data is available for fusion
+        newDataFlow = false;
+        // indicate that flow fusion has been performed. This is used for load spreading.
+        flowFusePerformed = true;
+        // update the time stamp
+        prevFlowFusionTime_ms = imuSampleTime_ms;
+
+    } else if (useOptFlow() && flow_state.obsIndex == 1 && !delayFusion && !staticMode){
+        // Fuse the optical flow Y axis data into the main filter
+        FuseOptFlow();
+        // increment the index to fuse the X and Y data using the 2-state EKF on the next prediction cycle
+        flow_state.obsIndex = 2;
+        // indicate that flow fusion has been performed. This is used for load spreading.
+        flowFusePerformed = true;
+    } else if (((useOptFlow() && flow_state.obsIndex == 2) || newDataRng) && !staticMode) {
+        // enable fusion of range data if available and permitted
+        if(newDataRng && useRngFinder()) {
+            fuseRngData = true;
+        } else {
+            fuseRngData = false;
+        }
+        // the fact that we have got this far means we do have optical flow data
+        fuseOptFlowData = true;
+        // Estimate the focal length scale factor and terrain offset (runs a two state EKF)
+        RunAuxiliaryEKF();
+        // turn of fusion permissions
+        // increment the index so that no further flow fusion is performed using this measurement
+        flow_state.obsIndex = 3;
+        // clear the flag indicating that flow fusion has been performed. The 2-state fusion is relatively computationally
+        // cheap and can be perfomred on the same prediction cycle with subsequent fusion steps
+        flowFusePerformed = false;
+        // reset the flag to indicate that no new range finder data is available for fusion
+        newDataRng = false;
+    }
+    // Apply corrections to quaternion, position and velocity states across several time steps to reduce 10Hz pulsing in the output
+    if (flowUpdateCount < flowUpdateCountMax) {
+        flowUpdateCount ++;
+        for (uint8_t i = 0; i <= 9; i++) {
+            states[i] += flowIncrStateDelta[i];
+        }
+    }
 }
 
 // select fusion of true airspeed measurements
@@ -772,34 +1009,36 @@ void NavEKF::SelectTasFusion()
 
     // if the filter is initialised, wind states are not inhibited and we have data to fuse, then queue TAS fusion
     tasDataWaiting = (statesInitialised && !inhibitWindStates && (tasDataWaiting || newDataTas));
-
     // if we have waited too long, set a timeout flag which will force fusion to occur
-    bool timeout = ((IMUmsec - TASmsecPrev) >= TASmsecMax);
-
+    bool timeout = ((imuSampleTime_ms - TASmsecPrev) >= TASmsecMax);
     // we don't fuse airspeed measurements if magnetometer fusion has been performed in the same frame, unless timed out or the fuseMeNow option is selected
     // this helps to spreasthe load associated with fusion of different measurements across multiple frames
     // setting fuseMeNow to true disables this load spreading feature
-    if (tasDataWaiting && (!magFusePerformed || timeout || fuseMeNow))
+    if (tasDataWaiting && (!(covPredStep || magFusePerformed || flowFusePerformed) || timeout || inhibitLoadLeveling))
     {
         FuseAirspeed();
-        TASmsecPrev = IMUmsec;
+        TASmsecPrev = imuSampleTime_ms;
         tasDataWaiting = false;
     }
 }
 
 // select fusion of synthetic sideslip measurements
+// synthetic sidelip fusion only works for fixed wing aircraft and relies on the average sideslip being close to zero
+// it requires a stable wind for best results and should not be used for aerobatic flight with manoeuvres that induce large sidslip angles (eg knife-edge, spins, etc)
 void NavEKF::SelectBetaFusion()
 {
-    // Determine if synthetic sidelsip data should be fused
-    // synthetic sidelip fusion only works for fixed wing aircraft and relies on the average sideslip being close to zero
-    // it requires a stable wind estimate for best results and should not be used for aerobatic flight
-    // we fuse synthetic sideslip measurements if:
-    // we are a fly forward vehicle type AND NOT using a full range of sensors with healthy position
-    // AND NOT on the ground AND enough time has lapsed since our last fusion
-    // AND (we have not fused magnetometer data on this time step OR the immediate fusion flag is set)
-    if (assume_zero_sideslip() && !(use_compass() && useAirspeed() && posHealth) && !inhibitWindStates  && ((IMUmsec - BETAmsecPrev) >= _msecBetaAvg) && (!magFusePerformed || fuseMeNow)) {
+    // set to true if fusion is locked out due to magnetometer fusion on the same time step (done for load levelling)
+    bool f_lockedOut = (magFusePerformed && !inhibitLoadLeveling);
+    // set true when the fusion time interval has triggered
+    bool f_timeTrigger = ((imuSampleTime_ms - BETAmsecPrev) >= _msecBetaAvg);
+    // set true when use of synthetic sideslip fusion is necessary because we have limited sensor data or are dead reckoning position
+    bool f_required = !(use_compass() && useAirspeed() && posHealth);
+    // set true when sideslip fusion is feasible (requires zero sideslip assumption to be valid and use of wind states)
+    bool f_feasible = (assume_zero_sideslip() && !inhibitWindStates);
+    // use synthetic sideslip fusion if feasible, required, enough time has lapsed since the last fusion and it is not locked out
+    if (f_feasible && f_required && f_timeTrigger && !f_lockedOut) {
         FuseSideslip();
-        BETAmsecPrev = IMUmsec;
+        BETAmsecPrev = imuSampleTime_ms;
     }
 }
 
@@ -825,12 +1064,12 @@ void NavEKF::UpdateStrapdownEquationsNED()
     // use weighted average of both IMU units for delta velocities
     correctedDelVel12 = correctedDelVel1 * IMU1_weighting + correctedDelVel2 * (1.0f - IMU1_weighting);
 
-    // save current measurements
-    prevDelAng = correctedDelAng;
-
     // apply corrections for earths rotation rate and coning errors
     // % * - and + operators have been overloaded
     correctedDelAng   = correctedDelAng - prevTnb * earthRateNED*dtIMU + (prevDelAng % correctedDelAng) * 8.333333e-2f;
+
+    // save current measurements
+    prevDelAng = correctedDelAng;
 
     // convert the rotation vector to its equivalent quaternion
     rotationMag = correctedDelAng.length();
@@ -862,9 +1101,8 @@ void NavEKF::UpdateStrapdownEquationsNED()
     state.quat = qUpdated;
 
     // calculate the body to nav cosine matrix
-    Quaternion q(states[0],states[1],states[2],states[3]);
     Matrix3f Tbn_temp;
-    q.rotation_matrix(Tbn_temp);
+    state.quat.rotation_matrix(Tbn_temp);
     prevTnb = Tbn_temp.transposed();
 
     // transform body delta velocities to delta velocities in the nav frame
@@ -900,6 +1138,9 @@ void NavEKF::UpdateStrapdownEquationsNED()
     state.position += (state.velocity + lastVelocity) * (dtIMU*0.5f);
     state.posD1    += (state.vel1.z + lastVel1.z) * (dtIMU*0.5f);
     state.posD2    += (state.vel2.z + lastVel2.z) * (dtIMU*0.5f);
+
+    // capture current angular rate to augmented state vector for use by optical flow fusion
+    state.omega = correctedDelAng * dtIMUinv;
 
     // limit states to protect against divergence
     ConstrainStates();
@@ -940,7 +1181,7 @@ void NavEKF::CovariancePrediction()
     // this allows for wind gradient effects.
     // filter height rate using a 10 second time constant filter
     float alpha = 0.1f * dt;
-    hgtRate = hgtRate * (1.0f - alpha) - states[6] * alpha;
+    hgtRate = hgtRate * (1.0f - alpha) - state.velocity.z * alpha;
 
     // use filtered height rate to increase wind process noise when climbing or descending
     // this allows for wind gradient effects.
@@ -980,14 +1221,14 @@ void NavEKF::CovariancePrediction()
     dax = summedDelAng.x;
     day = summedDelAng.y;
     daz = summedDelAng.z;
-    q0 = states[0];
-    q1 = states[1];
-    q2 = states[2];
-    q3 = states[3];
-    dax_b = states[10];
-    day_b = states[11];
-    daz_b = states[12];
-    dvz_b = IMU1_weighting * states[13] + (1.0f - IMU1_weighting) * states[22];
+    q0 = state.quat[0];
+    q1 = state.quat[1];
+    q2 = state.quat[2];
+    q3 = state.quat[3];
+    dax_b = state.gyro_bias.x;
+    day_b = state.gyro_bias.y;
+    daz_b = state.gyro_bias.z;
+    dvz_b = IMU1_weighting * state.accel_zbias1 + (1.0f - IMU1_weighting) * state.accel_zbias2;
     _gyrNoise = constrain_float(_gyrNoise, 1e-3f, 5e-2f);
     daxCov = sq(dt*_gyrNoise);
     dayCov = sq(dt*_gyrNoise);
@@ -1535,11 +1776,11 @@ void NavEKF::CovariancePrediction()
         nextP[i][i] = nextP[i][i] + processNoise[i];
     }
 
-    // if the total position variance exceeds 1E6 (1000m), then stop covariance
+    // if the total position variance exceeds 1e4 (100m), then stop covariance
     // growth by setting the predicted to the previous values
     // This prevent an ill conditioned matrix from occurring for long periods
     // without GPS
-    if ((P[7][7] + P[8][8]) > 1e6f)
+    if ((P[7][7] + P[8][8]) > 1e4f)
     {
         for (uint8_t i=7; i<=8; i++)
         {
@@ -1601,13 +1842,15 @@ void NavEKF::FuseVelPosNED()
     // associated with sequential fusion
     if (fuseVelData || fusePosData || fuseHgtData) {
 
-        // if static mode is active use the current states to calculate the predicted
+        // if static mode or velocity hold is active use the current states to calculate the predicted
         // measurement rather than use states from a previous time. We need to do this
         // because there may be no stored states due to lack of real measurements.
         // in static mode, only position and height fusion is used
         if (staticMode) {
             statesAtPosTime = state;
             statesAtHgtTime = state;
+        } else if (velHoldMode) {
+            statesAtVelTime = state;
         }
 
         // set the GPS data timeout depending on whether airspeed data is present
@@ -1616,12 +1859,17 @@ void NavEKF::FuseVelPosNED()
         else gpsRetryTime = _gpsRetryTimeNoTAS;
 
         // form the observation vector and zero velocity and horizontal position observations if in static mode
-        if (!staticMode) {
+        // If in velocity hold mode, hold the last known horizontal velocity vector
+        if (!staticMode && !velHoldMode) {
             for (uint8_t i=0; i<=2; i++) observation[i] = velNED[i];
             observation[3] = gpsPosNE.x + gpsPosGlitchOffsetNE.x;
             observation[4] = gpsPosNE.y + gpsPosGlitchOffsetNE.y;
-        } else {
+        } else if (staticMode){
             for (uint8_t i=0; i<=4; i++) observation[i] = 0.0f;
+        } else if (velHoldMode) {
+            observation[0] = heldVelNE.x;
+            observation[1] = heldVelNE.y;
+            for (uint8_t i=2; i<=4; i++) observation[i] = 0.0f;
         }
         observation[5] = -hgtMea;
 
@@ -1633,20 +1881,20 @@ void NavEKF::FuseVelPosNED()
         posErr = _gpsPosVarAccScale * accNavMag;
 
         // estimate the GPS Velocity, GPS horiz position and height measurement variances.
-        R_OBS[0] = gpsVarScaler*(sq(constrain_float(_gpsHorizVelNoise, 0.05f, 5.0f)) + sq(NEvelErr));
+        R_OBS[0] = sq(constrain_float(_gpsHorizVelNoise, 0.05f, 5.0f)) + sq(NEvelErr);
         R_OBS[1] = R_OBS[0];
-        R_OBS[2] = gpsVarScaler*(sq(constrain_float(_gpsVertVelNoise, 0.05f, 5.0f)) + sq(DvelErr));
-        R_OBS[3] = gpsVarScaler*(sq(constrain_float(_gpsHorizPosNoise, 0.1f, 10.0f)) + sq(posErr));
+        R_OBS[2] = sq(constrain_float(_gpsVertVelNoise, 0.05f, 5.0f)) + sq(DvelErr);
+        R_OBS[3] = sq(constrain_float(_gpsHorizPosNoise, 0.1f, 10.0f)) + sq(posErr);
         R_OBS[4] = R_OBS[3];
-        R_OBS[5] = hgtVarScaler*sq(constrain_float(_baroAltNoise, 0.1f, 10.0f));
+        R_OBS[5] = sq(constrain_float(_baroAltNoise, 0.1f, 10.0f));
 
         // if vertical GPS velocity data is being used, check to see if the GPS vertical velocity and barometer
         // innovations have the same sign and are outside limits. If so, then it is likely aliasing is affecting
         // the accelerometers and we should disable the GPS and barometer innovation consistency checks.
         bool badIMUdata = false;
-            if (_fusionModeGPS == 0 && fuseVelData && fuseHgtData) {
+        if (_fusionModeGPS == 0 && fuseVelData && (imuSampleTime_ms - lastHgtTime_ms) <  (2 * _msecHgtAvg)) {
             // calculate innovations for height and vertical GPS vel measurements
-            float hgtErr  = statesAtVelTime.position.z - observation[5];
+            float hgtErr  = statesAtHgtTime.position.z - observation[5];
             float velDErr = statesAtVelTime.velocity.z - observation[2];
             // check if they are the same sign and both more than 3-sigma out of bounds
             if ((hgtErr*velDErr > 0.0f) && (sq(hgtErr) > 9.0f * (P[9][9] + R_OBS[5])) && (sq(velDErr) > 9.0f * (P[6][6] + R_OBS[2]))) {
@@ -1667,16 +1915,16 @@ void NavEKF::FuseVelPosNED()
             // apply an innovation consistency threshold test, but don't fail if bad IMU data
             // calculate max valid position innovation squared based on a maximum horizontal inertial nav accel error and GPS noise parameter
             // max inertial nav error is scaled with horizontal g to allow for increased errors when manoeuvring
-            float accelScale =  (1.0f + 0.1f * accNavMagHoriz);
-            float maxPosInnov2 = sq(_gpsPosInnovGate * _gpsHorizPosNoise + 0.005f * accelScale * float(_gpsGlitchAccelMax) * sq(0.001f * float(hal.scheduler->millis() - posFailTime)));
+            float accelScale =  (1.0f + 0.1f * accNavMag);
+            float maxPosInnov2 = sq(_gpsPosInnovGate * _gpsHorizPosNoise + 0.005f * accelScale * float(_gpsGlitchAccelMax) * sq(0.001f * float(imuSampleTime_ms - posFailTime)));
             posTestRatio = (sq(posInnov[0]) + sq(posInnov[1])) / maxPosInnov2;
             posHealth = ((posTestRatio < 1.0f) || badIMUdata);
             // declare a timeout condition if we have been too long without data
-            posTimeout = ((hal.scheduler->millis() - posFailTime) > gpsRetryTime);
+            posTimeout = ((imuSampleTime_ms - posFailTime) > gpsRetryTime);
             // use position data if healthy, timed out, or in static mode
             if (posHealth || posTimeout || staticMode) {
                 posHealth = true;
-                posFailTime = hal.scheduler->millis();
+                posFailTime = imuSampleTime_ms;
                 // if timed out or outside the specified glitch radius, increment the offset applied to GPS data to compensate for large GPS position jumps
                 if (posTimeout || (maxPosInnov2 > sq(float(_gpsGlitchRadiusMax)))) {
                     gpsPosGlitchOffsetNE.x += posInnov[0];
@@ -1697,7 +1945,7 @@ void NavEKF::FuseVelPosNED()
         if (fuseVelData) {
             // test velocity measurements
             uint8_t imax = 2;
-            if (_fusionModeGPS == 1) {
+            if (_fusionModeGPS == 1 || velHoldMode) {
                 imax = 1;
             }
             float K1 = 0; // innovation to error ratio for IMU1
@@ -1713,7 +1961,7 @@ void NavEKF::FuseVelPosNED()
                 velInnov2[i] = statesAtVelTime.vel2[i] - observation[i]; // IMU2
                 // calculate innovation variance
                 varInnovVelPos[i] = P[stateIndex][stateIndex] + R_OBS[i];
-                // calculate error weightings for singloe IMU velocity states using
+                // calculate error weightings for single IMU velocity states using
                 // observation error to normalise
                 float R_hgt;
                 if (i == 2) {
@@ -1737,11 +1985,11 @@ void NavEKF::FuseVelPosNED()
             // fail if the ratio is greater than 1
             velHealth = ((velTestRatio < 1.0f)  || badIMUdata);
             // declare a timeout if we have not fused velocity data for too long
-            velTimeout = (hal.scheduler->millis() - velFailTime) > gpsRetryTime;
+            velTimeout = (imuSampleTime_ms - velFailTime) > gpsRetryTime;
             // if data is healthy  or in static mode we fuse it
-            if (velHealth || staticMode) {
+            if (velHealth || staticMode || velHoldMode) {
                 velHealth = true;
-                velFailTime = hal.scheduler->millis();
+                velFailTime = imuSampleTime_ms;
             } else if (velTimeout && !posHealth) {
                 // if data is not healthy and timed out and position is unhealthy we reset the velocity, but do not fuse data on this time step
                 ResetVelocity();
@@ -1766,11 +2014,11 @@ void NavEKF::FuseVelPosNED()
             hgtTestRatio = sq(hgtInnov) / (sq(_hgtInnovGate) * varInnovVelPos[5]);
             // fail if the ratio is > 1, but don't fail if bad IMU data
             hgtHealth = ((hgtTestRatio < 1.0f) || badIMUdata);
-            hgtTimeout = (hal.scheduler->millis() - hgtFailTime) > hgtRetryTime;
+            hgtTimeout = (imuSampleTime_ms - hgtFailTime) > hgtRetryTime;
             // Fuse height data if healthy or timed out or in static mode
             if (hgtHealth || hgtTimeout || staticMode) {
                 hgtHealth = true;
-                hgtFailTime = hal.scheduler->millis();
+                hgtFailTime = imuSampleTime_ms;
                 // if timed out, reset the height, but do not fuse data on this time step
                 if (hgtTimeout) {
                     ResetHeight();
@@ -1784,21 +2032,25 @@ void NavEKF::FuseVelPosNED()
         }
 
         // set range for sequential fusion of velocity and position measurements depending on which data is available and its health
-        if (fuseVelData && _fusionModeGPS == 0 && velHealth && !staticMode) {
+        if (fuseVelData && _fusionModeGPS == 0 && velHealth && !staticMode && gpsInhibitMode == 0) {
             fuseData[0] = true;
             fuseData[1] = true;
             fuseData[2] = true;
         }
-        if (fuseVelData && _fusionModeGPS == 1 && velHealth && !staticMode) {
+        if (fuseVelData && _fusionModeGPS == 1 && velHealth && !staticMode && gpsInhibitMode == 0) {
             fuseData[0] = true;
             fuseData[1] = true;
         }
-        if ((fusePosData && _fusionModeGPS <= 2 && posHealth) || staticMode) {
+        if ((fusePosData && posHealth && gpsInhibitMode == 0) || staticMode) {
             fuseData[3] = true;
             fuseData[4] = true;
         }
         if ((fuseHgtData && hgtHealth) || staticMode) {
             fuseData[5] = true;
+        }
+        if (velHoldMode) {
+            fuseData[0] = true;
+            fuseData[1] = true;
         }
 
         // fuse measurements sequentially
@@ -1806,12 +2058,15 @@ void NavEKF::FuseVelPosNED()
             if (fuseData[obsIndex]) {
                 stateIndex = 4 + obsIndex;
                 // calculate the measurement innovation, using states from a different time coordinate if fusing height data
+                // adjust scaling on GPS measurement noise variances if not enough satellites
                 if (obsIndex <= 2)
                 {
                     innovVelPos[obsIndex] = statesAtVelTime.velocity[obsIndex] - observation[obsIndex];
+                    R_OBS[obsIndex] *= sq(gpsNoiseScaler);
                 }
                 else if (obsIndex == 3 || obsIndex == 4) {
                     innovVelPos[obsIndex] = statesAtPosTime.position[obsIndex-3] - observation[obsIndex];
+                    R_OBS[obsIndex] *= sq(gpsNoiseScaler);
                 } else {
                     innovVelPos[obsIndex] = statesAtHgtTime.position[obsIndex-3] - observation[obsIndex];
                 }
@@ -1862,10 +2117,10 @@ void NavEKF::FuseVelPosNED()
                     // Calculate height measurement innovations using single IMU states
                     float hgtInnov1 = statesAtHgtTime.posD1 - observation[obsIndex];
                     float hgtInnov2 = statesAtHgtTime.posD2 - observation[obsIndex];
-                    // Correct single IMU prediction states using height measurement, limiting rate of change of bias to 0.02 m/s3
-                    float correctionLimit = 0.02f * dtIMU *dtVelPos;
-                    states[13] = states[13] - constrain_float(Kfusion[13] * hgtInnov1, -correctionLimit, correctionLimit); // IMU1 Z accel bias
-                    states[22] = states[22] - constrain_float(Kfusion[22] * hgtInnov2, -correctionLimit, correctionLimit); // IMU2 Z accel bias
+                    // Correct single IMU prediction states using height measurement, limiting rate of change of bias to 0.002 m/s3
+                    float correctionLimit = 0.002f * dtIMU * dtVelPos;
+                    state.accel_zbias1 -= constrain_float(Kfusion[13] * hgtInnov1, -correctionLimit, correctionLimit); // IMU1 Z accel bias
+                    state.accel_zbias2 -= constrain_float(Kfusion[22] * hgtInnov2, -correctionLimit, correctionLimit); // IMU2 Z accel bias
                     for (uint8_t i = 23; i<=26; i++) {
                         states[i] = states[i] - Kfusion[i] * hgtInnov1; // IMU1 velNED,posD
                     }
@@ -1882,9 +2137,21 @@ void NavEKF::FuseVelPosNED()
                     }
                 }
 
-                // calculate state corrections and re-normalise the quaternions for blended IMU data predicted states
+                // calculate state corrections and re-normalise the quaternions for states predicted using the blended IMU data
+                // attitude, velocity and position corrections are spread across multiple prediction cycles between now
+                // and the anticipated time for the next measurement.
+                // Don't spread quaternion corrections if total angle change across predicted interval is going to exceed 0.1 rad
+                bool highRates = ((gpsUpdateCountMax * correctedDelAng.length()) > 0.1f);
                 for (uint8_t i = 0; i<=21; i++) {
-                    states[i] = states[i] - Kfusion[i] * innovVelPos[obsIndex];
+                    if ((i <= 3 && highRates) || i >= 10 || staticMode || velHoldMode) {
+                        states[i] = states[i] - Kfusion[i] * innovVelPos[obsIndex];
+                    } else {
+                        if (obsIndex == 5) {
+                            hgtIncrStateDelta[i] -= Kfusion[i] * innovVelPos[obsIndex] * hgtUpdateCountMaxInv;
+                        } else {
+                            gpsIncrStateDelta[i] -= Kfusion[i] * innovVelPos[obsIndex] * gpsUpdateCountMaxInv;
+                        }
+                    }
                 }
                 state.quat.normalize();
 
@@ -1905,7 +2172,7 @@ void NavEKF::FuseVelPosNED()
         }
     }
 
-    // force the covariance matrix to me symmetrical and limit the variances to prevent ill-condiioning.
+    // force the covariance matrix to be symmetrical and limit the variances to prevent ill-condiioning.
     ForceSymmetry();
     ConstrainVariances();
 
@@ -2228,13 +2495,24 @@ void NavEKF::FuseMagnetometer()
         // Don't fuse unless all componenets pass. The exception is if the bad health has timed out and we are not a fly forward vehicle
         // In this case we might as well try using the magnetometer, but with a reduced weighting
         if (magHealth || ((magTestRatio[obsIndex] < 1.0f) && !assume_zero_sideslip() && magTimeout)) {
-            // correct the state vector
+            // Attitude, velocity and position corrections are averaged across multiple prediction cycles between now and the anticipated time for the next measurement.
+            // Don't do averaging of quaternion state corrections if total angle change across predicted interval is going to exceed 0.1 rad
+            bool highRates = ((magUpdateCountMax * correctedDelAng.length()) > 0.1f);
+            // Calculate the number of averaging frames left to go. This is required becasue magnetometer fusion is applied across three consecutive prediction cycles
+            // There is no point averaging if the number of cycles left is less than 2
+            float minorFramesToGo = float(magUpdateCountMax) - float(magUpdateCount);
+            // correct the state vector or store corrections to be applied incrementally
             for (uint8_t j= 0; j<=21; j++) {
                 // If we are forced to use a bad compass, we reduce the weighting by a factor of 4
                 if (!magHealth) {
                     Kfusion[j] *= 0.25f;
                 }
-                states[j] = states[j] - Kfusion[j] * innovMag[obsIndex];
+                if ((j <= 3 && highRates) || j >= 10 || staticMode || minorFramesToGo < 1.5f ) {
+                    states[j] = states[j] - Kfusion[j] * innovMag[obsIndex];
+                } else {
+                    // scale the correction based on the number of averaging frames left to go
+                    magIncrStateDelta[j] -= Kfusion[j] * innovMag[obsIndex] * (magUpdateCountMaxInv * float(magUpdateCountMax) / minorFramesToGo);
+                }
             }
             // normalise the quaternion states
             state.quat.normalize();
@@ -2293,6 +2571,534 @@ void NavEKF::FuseMagnetometer()
 
     // stop performance timer
     perf_end(_perf_FuseMagnetometer);
+}
+
+/*
+Estimation of optical flow sensor focal length scale factor and terrain offset using a two state EKF
+This fiter requires optical flow rates that are not motion compensated
+*/
+void NavEKF::RunAuxiliaryEKF()
+{
+    // start performance timer
+    perf_begin(_perf_OpticalFlowEKF);
+
+    // calculate a predicted LOS rate squared
+    float losRateSq = (sq(state.velocity.x) + sq(state.velocity.y)) / sq(flowStates[1] - state.position[2]);
+    // don't update terrain offset state if there is no range finder and not generating enough LOS rate, or without GPS, as it is poorly observable
+    if ((losRateSq < 0.01f || gpsInhibitMode == 2) && !fuseRngData) {
+        inhibitGndState = true;
+    } else {
+        inhibitGndState = false;
+    }
+    // Don't update focal length offset if there is no range finder or not using GPS, or we are not flying fast enough to generate a useful LOS rate
+    if (!fuseRngData || gpsInhibitMode == 2 || losRateSq < 0.01f || (flowStates[1] - state.position[2]) < 3.0f) {
+        fScaleInhibit = true;
+    } else {
+        fScaleInhibit = false;
+    }
+
+    // propagate ground position state noise each time this is called using the difference in position since the last observations and an RMS gradient assumption
+    // limit distance to prevent intialisation afer bad gps causing bad numerical conditioning
+    if (!inhibitGndState) {
+        float distanceTravelledSq;
+        if (fuseRngData) {
+            distanceTravelledSq = sq(statesAtRngTime.position[0] - prevPosN) + sq(statesAtRngTime.position[1] - prevPosE);
+            prevPosN = statesAtRngTime.position[0];
+            prevPosE = statesAtRngTime.position[1];
+        } else if (fuseOptFlowData) {
+            distanceTravelledSq = sq(statesAtFlowTime.position[0] - prevPosN) + sq(statesAtFlowTime.position[1] - prevPosE);
+            prevPosN = statesAtFlowTime.position[0];
+            prevPosE = statesAtFlowTime.position[1];
+        } else {
+            return;
+        }
+        distanceTravelledSq = min(distanceTravelledSq, 100.0f);
+        float timeLapsed = min(0.001f * (imuSampleTime_ms - timeAtLastAuxEKF_ms), 1.0f);
+        Popt[1][1] += (distanceTravelledSq * sq(0.01f*float(_gndGradientSigma))) + sq(2.0f * timeLapsed);
+        timeAtLastAuxEKF_ms = imuSampleTime_ms;
+    }
+
+    // fuse range finder data
+    if (fuseRngData) {
+        float range; // range from camera to centre of image
+        float q0; // quaternion at optical flow measurement time
+        float q1; // quaternion at optical flow measurement time
+        float q2; // quaternion at optical flow measurement time
+        float q3; // quaternion at optical flow measurement time
+        float R_RNG = 0.5; // range measurement variance (m^2) TODO make this a function of range and tilt to allow for sensor, alignment and AHRS errors
+
+        // Copy required states to local variable names
+        q0             = statesAtRngTime.quat[0];
+        q1             = statesAtRngTime.quat[1];
+        q2             = statesAtRngTime.quat[2];
+        q3             = statesAtRngTime.quat[3];
+
+        // calculate Kalman gains
+        float SK_RNG[3];
+        SK_RNG[0] = sq(q0) - sq(q1) - sq(q2) + sq(q3);
+        SK_RNG[1] = 1/(R_RNG + Popt[1][1]/sq(SK_RNG[0]));
+        SK_RNG[2] = 1/SK_RNG[0];
+        float K_RNG[2];
+        if (!fScaleInhibit) {
+            K_RNG[0] = Popt[0][1]*SK_RNG[1]*SK_RNG[2];
+        } else {
+            K_RNG[0] = 0.0f;
+        }
+        if (!inhibitGndState) {
+            K_RNG[1] = Popt[1][1]*SK_RNG[1]*SK_RNG[2];
+        } else {
+            K_RNG[1] = 0.0f;
+        }
+
+        // Calculate the innovation variance for data logging
+        varInnovRng = 1.0f/SK_RNG[1];
+
+        // constrain terrain height to be below the vehicle
+        flowStates[1] = max(flowStates[1], statesAtRngTime.position[2] + 0.1f);
+
+        // estimate range to centre of image
+        range = (flowStates[1] - statesAtRngTime.position[2]) * SK_RNG[2];
+
+        // Calculate the measurement innovation
+        innovRng = range - rngMea;
+
+        // calculate the innovation consistency test ratio
+        auxRngTestRatio = sq(innovRng) / (sq(_rngInnovGate) * varInnovRng);
+
+        // Check the innovation for consistency and don't fuse if > 5Sigma
+        if ((sq(innovRng)*SK_RNG[1]) < 25.0f)
+        {
+            // correct the state
+            for (uint8_t i = 0; i < 2 ; i++) {
+                flowStates[i] -= K_RNG[i] * innovRng;
+            }
+            // constrain the states
+            flowStates[0] = constrain_float(flowStates[0], 0.8f, 1.25f);
+            flowStates[1] = max(flowStates[1], statesAtRngTime.position[2] + 0.1f);
+
+            // correct the covariance matrix
+            float nextPopt[2][2];
+            nextPopt[0][0] = Popt[0][0] - (Popt[0][1]*Popt[1][0]*SK_RNG[1]*SK_RNG[2]) * SK_RNG[2];
+            nextPopt[0][1] = Popt[0][1] - (Popt[0][1]*Popt[1][1]*SK_RNG[1]*SK_RNG[2]) * SK_RNG[2];
+            nextPopt[1][0] = -Popt[1][0]*((Popt[1][1]*SK_RNG[1]*SK_RNG[2]) * SK_RNG[2] - 1.0f);
+            nextPopt[1][1] = -Popt[1][1]*((Popt[1][1]*SK_RNG[1]*SK_RNG[2]) * SK_RNG[2] - 1.0f);
+            // prevent the state variances from becoming negative and maintain symmetry
+            Popt[0][0] = max(nextPopt[0][0],0.0f);
+            Popt[1][1] = max(nextPopt[1][1],0.0f);
+            Popt[0][1] = 0.5f * (nextPopt[0][1] + nextPopt[1][0]);
+            Popt[1][0] = Popt[0][1];
+        }
+    }
+
+
+    if (fuseOptFlowData) {
+        Vector3f vel; // velocity of sensor relative to ground in NED axes
+        Vector3f relVelSensor; // velocity of sensor relative to ground in sensor axes
+        float losPred[2]; // predicted optical flow angular rate measurements
+        float range; // range from camera to centre of image
+        float q0; // quaternion at optical flow measurement time
+        float q1; // quaternion at optical flow measurement time
+        float q2; // quaternion at optical flow measurement time
+        float q3; // quaternion at optical flow measurement time
+        float HP[2];
+        float SH_OPT[6];
+        float SK_OPT[3];
+        float K_OPT[2][2];
+        float H_OPT[2][2];
+        float nextPopt[2][2];
+        float SH015;
+        float SH025;
+        float SH014;
+        float SH024;
+
+        // propagate scale factor state noise
+        if (!fScaleInhibit) {
+            Popt[0][0] += 1e-8f;
+        } else {
+            Popt[0][0] = 0.0f;
+        }
+
+        // Copy required states to local variable names
+        q0             = statesAtFlowTime.quat[0];
+        q1             = statesAtFlowTime.quat[1];
+        q2             = statesAtFlowTime.quat[2];
+        q3             = statesAtFlowTime.quat[3];
+        vel.x          = statesAtFlowTime.velocity[0];
+        vel.y          = statesAtFlowTime.velocity[1];
+        vel.z          = statesAtFlowTime.velocity[2];
+
+        // constrain terrain height to be below the vehicle
+        flowStates[1] = max(flowStates[1], statesAtFlowTime.position[2] + 0.1f);
+
+        // estimate range to centre of image
+        range = (flowStates[1] - statesAtFlowTime.position[2]) / Tnb_flow.c.z;
+
+        // calculate relative velocity in sensor frame
+        relVelSensor = Tnb_flow*vel;
+
+        // divide velocity by range, subtract body rates and apply scale factor to
+        // get predicted sensed angular optical rates relative to X and Y sensor axes
+        losPred[0] =  flowStates[0]*( relVelSensor.y/range) - omegaAcrossFlowTime.x;
+        losPred[1] =  flowStates[0]*(-relVelSensor.x/range) - omegaAcrossFlowTime.y;
+
+        // calculate innovations
+        auxFlowObsInnov[0] = losPred[0] - flowRadXY[0];
+        auxFlowObsInnov[1] = losPred[1] - flowRadXY[1];
+
+        // calculate Kalman gains
+        SH_OPT[0] = sq(q0) - sq(q1) - sq(q2) + sq(q3);
+        SH_OPT[1] = vel.x*(sq(q0) + sq(q1) - sq(q2) - sq(q3)) + vel.y*(2*q0*q3 + 2*q1*q2) - vel.z*(2*q0*q2 - 2*q1*q3);
+        SH_OPT[2] = vel.y*(sq(q0) - sq(q1) + sq(q2) - sq(q3)) - vel.x*(2*q0*q3 - 2*q1*q2) + vel.z*(2*q0*q1 + 2*q2*q3);
+        SH_OPT[3] = statesAtFlowTime.position[2] - flowStates[1];
+        SH_OPT[4] = 1.0f/sq(SH_OPT[3]);
+        SH_OPT[5] = 1.0f/SH_OPT[3];
+        SH015 = SH_OPT[0]*SH_OPT[1]*SH_OPT[5];
+        SH025 = SH_OPT[0]*SH_OPT[2]*SH_OPT[5];
+        SH014 = SH_OPT[0]*SH_OPT[1]*SH_OPT[4];
+        SH024 = SH_OPT[0]*SH_OPT[2]*SH_OPT[4];
+        SK_OPT[0] = 1.0f/(R_LOS + SH015*(Popt[0][0]*SH015 + Popt[1][0]*flowStates[0]*SH014) + flowStates[0]*SH014*(Popt[0][1]*SH015 + Popt[1][1]*flowStates[0]*SH014));
+        SK_OPT[1] = 1.0f/(R_LOS + SH025*(Popt[0][0]*SH025 + Popt[1][0]*flowStates[0]*SH024) + flowStates[0]*SH024*(Popt[0][1]*SH025 + Popt[1][1]*flowStates[0]*SH024));
+        SK_OPT[2] = SH_OPT[0];
+        if (!fScaleInhibit) {
+            K_OPT[0][0] = -SK_OPT[1]*(Popt[0][0]*SH_OPT[2]*SH_OPT[5]*SK_OPT[2] + Popt[0][1]*flowStates[0]*SH_OPT[2]*SH_OPT[4]*SK_OPT[2]);
+            K_OPT[0][1] =  SK_OPT[0]*(Popt[0][0]*SH_OPT[1]*SH_OPT[5]*SK_OPT[2] + Popt[0][1]*flowStates[0]*SH_OPT[1]*SH_OPT[4]*SK_OPT[2]);
+        } else {
+            K_OPT[0][0] = 0.0f;
+            K_OPT[0][1] = 0.0f;
+        }
+        if (!inhibitGndState) {
+            K_OPT[1][0] = -SK_OPT[1]*(Popt[1][0]*SH_OPT[2]*SH_OPT[5]*SK_OPT[2] + Popt[1][1]*flowStates[0]*SH_OPT[2]*SH_OPT[4]*SK_OPT[2]);
+            K_OPT[1][1] =  SK_OPT[0]*(Popt[1][0]*SH_OPT[1]*SH_OPT[5]*SK_OPT[2] + Popt[1][1]*flowStates[0]*SH_OPT[1]*SH_OPT[4]*SK_OPT[2]);
+        } else {
+            K_OPT[1][0] = 0.0f;
+            K_OPT[1][1] = 0.0f;
+        }
+
+        // calculate observations jacobians
+        H_OPT[0][0] = -SH025;
+        H_OPT[0][1] = -flowStates[0]*SH024;
+        H_OPT[1][0] =  SH015;
+        H_OPT[1][1] =  flowStates[0]*SH014;
+
+        // calculate innovation variances
+        auxFlowObsInnovVar[0] = 1.0f/SK_OPT[1];
+        auxFlowObsInnovVar[1] = 1.0f/SK_OPT[0];
+
+        // Check the innovation for consistency and don't fuse if > threshold
+        for (uint8_t obsIndex = 0; obsIndex < 2; obsIndex++) {
+
+            // calculate the innovation consistency test ratio
+            auxFlowTestRatio[obsIndex] = sq(auxFlowObsInnov[obsIndex]) / (sq(_flowInnovGate) * auxFlowObsInnovVar[obsIndex]);
+
+            if ((auxFlowTestRatio[obsIndex] < 1.0f) && (flowRadXY[obsIndex] < _maxFlowRate)) {
+                // correct the state
+                for (uint8_t i = 0; i < 2 ; i++) {
+                    flowStates[i] -= K_OPT[i][obsIndex] * auxFlowObsInnov[obsIndex];
+                }
+                // constrain the states
+                flowStates[0] = constrain_float(flowStates[0], 0.8f, 1.25f);
+                flowStates[1] = max(flowStates[1], statesAtFlowTime.position[2] + 0.1f);
+
+                // correct the covariance matrix
+                for (uint8_t i = 0; i < 2 ; i++) {
+                    HP[i] = 0.0f;
+                    for (uint8_t j = 0; j < 2 ; j++) {
+                        HP[i] += H_OPT[obsIndex][j] * P[j][i];
+                    }
+                }
+                for (uint8_t i = 0; i < 2 ; i++) {
+                    for (uint8_t j = 0; j < 2 ; j++) {
+                        nextPopt[i][j] = P[i][j] - K_OPT[i][obsIndex] * HP[j];
+                    }
+                }
+
+                // prevent the state variances from becoming negative and maintain symmetry
+                Popt[0][0] = max(nextPopt[0][0],0.0f);
+                Popt[1][1] = max(nextPopt[1][1],0.0f);
+                Popt[0][1] = 0.5f * (nextPopt[0][1] + nextPopt[1][0]);
+                Popt[1][0] = Popt[0][1];
+            }
+        }
+    }
+
+    // stop the performance timer
+    perf_end(_perf_OpticalFlowEKF);
+}
+
+void NavEKF::FuseOptFlow()
+{
+    // start performance timer
+    perf_begin(_perf_FuseOptFlow);
+
+    float H_LOS[22];
+    float tempVar[9];
+    Vector3f velNED_local;
+    Vector3f relVelSensor;
+
+    uint8_t &obsIndex = flow_state.obsIndex;
+    ftype &q0 = flow_state.q0;
+    ftype &q1 = flow_state.q1;
+    ftype &q2 = flow_state.q2;
+    ftype &q3 = flow_state.q3;
+    ftype *SH_LOS = &flow_state.SH_LOS[0];
+    ftype *SK_LOS = &flow_state.SK_LOS[0];
+    ftype &vn = flow_state.vn;
+    ftype &ve = flow_state.ve;
+    ftype &vd = flow_state.vd;
+    ftype &pd = flow_state.pd;
+    ftype *losPred = &flow_state.losPred[0];
+
+    // Copy required states to local variable names
+    q0       = statesAtFlowTime.quat[0];
+    q1       = statesAtFlowTime.quat[1];
+    q2       = statesAtFlowTime.quat[2];
+    q3       = statesAtFlowTime.quat[3];
+    vn       = statesAtFlowTime.velocity[0];
+    ve       = statesAtFlowTime.velocity[1];
+    vd       = statesAtFlowTime.velocity[2];
+    pd       = statesAtFlowTime.position[2];
+    velNED_local.x = vn;
+    velNED_local.y = ve;
+    velNED_local.z = vd;
+
+    // constrain terrain to be below vehicle
+    flowStates[1] = max(flowStates[1], pd + 0.1f);
+    float heightAboveGndEst = flowStates[1] - pd;
+    // Calculate observation jacobians and Kalman gains
+    if (obsIndex == 0) {
+        // calculate range from ground plain to centre of sensor fov assuming flat earth
+        float range = constrain_float((heightAboveGndEst/Tnb_flow.c.z),0.1f,1000.0f);
+
+        // calculate relative velocity in sensor frame
+        relVelSensor = Tnb_flow*velNED_local;
+
+        // divide velocity by range  to get predicted angular LOS rates relative to X and Y axes
+        losPred[0] =  relVelSensor.y/range;
+        losPred[1] = -relVelSensor.x/range;
+
+
+        // Calculate common expressions for observation jacobians
+        SH_LOS[0] = sq(q0) - sq(q1) - sq(q2) + sq(q3);
+        SH_LOS[1] = vn*(sq(q0) + sq(q1) - sq(q2) - sq(q3)) - vd*(2*q0*q2 - 2*q1*q3) + ve*(2*q0*q3 + 2*q1*q2);
+        SH_LOS[2] = ve*(sq(q0) - sq(q1) + sq(q2) - sq(q3)) + vd*(2*q0*q1 + 2*q2*q3) - vn*(2*q0*q3 - 2*q1*q2);
+        SH_LOS[3] = 1/(pd - flowStates[1]);
+        SH_LOS[4] = sq(SH_LOS[3]);
+
+        // Calculate common expressions for Kalman gains
+        float temp = (R_LOS + (SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3])*(P[0][0]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][0]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][0]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][0]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][0]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][0]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][0]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][0]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) + (SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3])*(P[0][1]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][1]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][1]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][1]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][1]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][1]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][1]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][1]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) - (SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3])*(P[0][2]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][2]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][2]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][2]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][2]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][2]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][2]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][2]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) + (SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3])*(P[0][3]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][3]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][3]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][3]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][3]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][3]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][3]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][3]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) - SH_LOS[0]*SH_LOS[1]*SH_LOS[4]*(P[0][9]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][9]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][9]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][9]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][9]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][9]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][9]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][9]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) + SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))*(P[0][4]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][4]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][4]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][4]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][4]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][4]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][4]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][4]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) + SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2)*(P[0][5]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][5]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][5]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][5]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][5]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][5]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][5]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][5]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))) - SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3)*(P[0][6]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3]) + P[1][6]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3]) - P[2][6]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) + 2*q2*SH_LOS[1]*SH_LOS[3]) + P[3][6]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3]) + P[5][6]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2) - P[6][6]*SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3) - P[9][6]*SH_LOS[0]*SH_LOS[1]*SH_LOS[4] + P[4][6]*SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3))));
+        if (fabsf(temp) < 1e-9f) return;
+        SK_LOS[0] = 1.0f/temp;
+        temp = (R_LOS + (SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3])*(P[0][0]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][0]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][0]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][0]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][0]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][0]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][0]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][0]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) + (SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3])*(P[0][1]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][1]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][1]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][1]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][1]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][1]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][1]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][1]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) + (SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3])*(P[0][2]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][2]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][2]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][2]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][2]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][2]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][2]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][2]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) - (SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3])*(P[0][3]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][3]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][3]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][3]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][3]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][3]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][3]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][3]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) - SH_LOS[0]*SH_LOS[2]*SH_LOS[4]*(P[0][9]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][9]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][9]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][9]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][9]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][9]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][9]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][9]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) + SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))*(P[0][5]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][5]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][5]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][5]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][5]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][5]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][5]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][5]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) - SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2)*(P[0][4]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][4]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][4]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][4]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][4]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][4]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][4]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][4]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))) + SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3)*(P[0][6]*(SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q0*SH_LOS[2]*SH_LOS[3]) + P[1][6]*(SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q1*SH_LOS[2]*SH_LOS[3]) + P[2][6]*(SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q2*SH_LOS[2]*SH_LOS[3]) - P[3][6]*(SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3]) - P[4][6]*SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2) + P[6][6]*SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3) - P[9][6]*SH_LOS[0]*SH_LOS[2]*SH_LOS[4] + P[5][6]*SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3))));
+        if (fabsf(temp) < 1e-9f) return;
+        SK_LOS[1] = 1.0f/temp;
+        SK_LOS[2] = SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn);
+        SK_LOS[3] = SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn);
+        SK_LOS[4] = SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn);
+        SK_LOS[5] = SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn);
+        SK_LOS[6] = sq(q0) - sq(q1) + sq(q2) - sq(q3);
+        SK_LOS[7] = sq(q0) + sq(q1) - sq(q2) - sq(q3);
+        SK_LOS[8] = SH_LOS[3];
+
+        // Calculate common intermediate terms
+        tempVar[0] = SH_LOS[0]*SK_LOS[6]*SK_LOS[8];
+        tempVar[1] = SH_LOS[0]*SH_LOS[2]*SH_LOS[4];
+        tempVar[2] = 2.0f*SH_LOS[2]*SK_LOS[8];
+        tempVar[3] = SH_LOS[0]*SK_LOS[8]*(2.0f*q0*q1 + 2.0f*q2*q3);
+        tempVar[4] = SH_LOS[0]*SK_LOS[8]*(2.0f*q0*q3 - 2.0f*q1*q2);
+        tempVar[5] = (SK_LOS[5] - q2*tempVar[2]);
+        tempVar[6] = (SK_LOS[2] - q3*tempVar[2]);
+        tempVar[7] = (SK_LOS[3] - q1*tempVar[2]);
+        tempVar[8] = (SK_LOS[4] + q0*tempVar[2]);
+
+        // calculate observation jacobians for X LOS rate
+        for (uint8_t i = 0; i < 23; i++) H_LOS[i] = 0;
+        H_LOS[0] = - SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) - 2*q0*SH_LOS[2]*SH_LOS[3];
+        H_LOS[1] = 2*q1*SH_LOS[2]*SH_LOS[3] - SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn);
+        H_LOS[2] = 2*q2*SH_LOS[2]*SH_LOS[3] - SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn);
+        H_LOS[3] = SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) - 2*q3*SH_LOS[2]*SH_LOS[3];
+        H_LOS[4] = SH_LOS[0]*SH_LOS[3]*(2*q0*q3 - 2*q1*q2);
+        H_LOS[5] = -SH_LOS[0]*SH_LOS[3]*(sq(q0) - sq(q1) + sq(q2) - sq(q3));
+        H_LOS[6] = -SH_LOS[0]*SH_LOS[3]*(2*q0*q1 + 2*q2*q3);
+        H_LOS[9] = tempVar[1];
+
+        // calculate Kalman gains for X LOS rate
+        Kfusion[0] = -(P[0][0]*tempVar[8] + P[0][1]*tempVar[7] - P[0][3]*tempVar[6] + P[0][2]*tempVar[5] - P[0][4]*tempVar[4] + P[0][6]*tempVar[3] - P[0][9]*tempVar[1] + P[0][5]*tempVar[0])/(R_LOS + tempVar[8]*(P[0][0]*tempVar[8] + P[1][0]*tempVar[7] + P[2][0]*tempVar[5] - P[3][0]*tempVar[6] - P[4][0]*tempVar[4] + P[6][0]*tempVar[3] - P[9][0]*tempVar[1] + P[5][0]*tempVar[0]) + tempVar[7]*(P[0][1]*tempVar[8] + P[1][1]*tempVar[7] + P[2][1]*tempVar[5] - P[3][1]*tempVar[6] - P[4][1]*tempVar[4] + P[6][1]*tempVar[3] - P[9][1]*tempVar[1] + P[5][1]*tempVar[0]) + tempVar[5]*(P[0][2]*tempVar[8] + P[1][2]*tempVar[7] + P[2][2]*tempVar[5] - P[3][2]*tempVar[6] - P[4][2]*tempVar[4] + P[6][2]*tempVar[3] - P[9][2]*tempVar[1] + P[5][2]*tempVar[0]) - tempVar[6]*(P[0][3]*tempVar[8] + P[1][3]*tempVar[7] + P[2][3]*tempVar[5] - P[3][3]*tempVar[6] - P[4][3]*tempVar[4] + P[6][3]*tempVar[3] - P[9][3]*tempVar[1] + P[5][3]*tempVar[0]) - tempVar[4]*(P[0][4]*tempVar[8] + P[1][4]*tempVar[7] + P[2][4]*tempVar[5] - P[3][4]*tempVar[6] - P[4][4]*tempVar[4] + P[6][4]*tempVar[3] - P[9][4]*tempVar[1] + P[5][4]*tempVar[0]) + tempVar[3]*(P[0][6]*tempVar[8] + P[1][6]*tempVar[7] + P[2][6]*tempVar[5] - P[3][6]*tempVar[6] - P[4][6]*tempVar[4] + P[6][6]*tempVar[3] - P[9][6]*tempVar[1] + P[5][6]*tempVar[0]) - tempVar[1]*(P[0][9]*tempVar[8] + P[1][9]*tempVar[7] + P[2][9]*tempVar[5] - P[3][9]*tempVar[6] - P[4][9]*tempVar[4] + P[6][9]*tempVar[3] - P[9][9]*tempVar[1] + P[5][9]*tempVar[0]) + tempVar[0]*(P[0][5]*tempVar[8] + P[1][5]*tempVar[7] + P[2][5]*tempVar[5] - P[3][5]*tempVar[6] - P[4][5]*tempVar[4] + P[6][5]*tempVar[3] - P[9][5]*tempVar[1] + P[5][5]*tempVar[0]));
+        Kfusion[1] = -SK_LOS[1]*(P[1][0]*tempVar[8] + P[1][1]*tempVar[7] - P[1][3]*tempVar[6] + P[1][2]*tempVar[5] - P[1][4]*tempVar[4] + P[1][6]*tempVar[3] - P[1][9]*tempVar[1] + P[1][5]*tempVar[0]);
+        Kfusion[2] = -SK_LOS[1]*(P[2][0]*tempVar[8] + P[2][1]*tempVar[7] - P[2][3]*tempVar[6] + P[2][2]*tempVar[5] - P[2][4]*tempVar[4] + P[2][6]*tempVar[3] - P[2][9]*tempVar[1] + P[2][5]*tempVar[0]);
+        Kfusion[3] = -SK_LOS[1]*(P[3][0]*tempVar[8] + P[3][1]*tempVar[7] - P[3][3]*tempVar[6] + P[3][2]*tempVar[5] - P[3][4]*tempVar[4] + P[3][6]*tempVar[3] - P[3][9]*tempVar[1] + P[3][5]*tempVar[0]);
+        Kfusion[4] = -SK_LOS[1]*(P[4][0]*tempVar[8] + P[4][1]*tempVar[7] - P[4][3]*tempVar[6] + P[4][2]*tempVar[5] - P[4][4]*tempVar[4] + P[4][6]*tempVar[3] - P[4][9]*tempVar[1] + P[4][5]*tempVar[0]);
+        Kfusion[5] = -SK_LOS[1]*(P[5][0]*tempVar[8] + P[5][1]*tempVar[7] - P[5][3]*tempVar[6] + P[5][2]*tempVar[5] - P[5][4]*tempVar[4] + P[5][6]*tempVar[3] - P[5][9]*tempVar[1] + P[5][5]*tempVar[0]);
+        Kfusion[6] = -SK_LOS[1]*(P[6][0]*tempVar[8] + P[6][1]*tempVar[7] - P[6][3]*tempVar[6] + P[6][2]*tempVar[5] - P[6][4]*tempVar[4] + P[6][6]*tempVar[3] - P[6][9]*tempVar[1] + P[6][5]*tempVar[0]);
+        Kfusion[7] = -SK_LOS[1]*(P[7][0]*tempVar[8] + P[7][1]*tempVar[7] - P[7][3]*tempVar[6] + P[7][2]*tempVar[5] - P[7][4]*tempVar[4] + P[7][6]*tempVar[3] - P[7][9]*tempVar[1] + P[7][5]*tempVar[0]);
+        Kfusion[8] = -SK_LOS[1]*(P[8][0]*tempVar[8] + P[8][1]*tempVar[7] - P[8][3]*tempVar[6] + P[8][2]*tempVar[5] - P[8][4]*tempVar[4] + P[8][6]*tempVar[3] - P[8][9]*tempVar[1] + P[8][5]*tempVar[0]);
+        Kfusion[9] = -SK_LOS[1]*(P[9][0]*tempVar[8] + P[9][1]*tempVar[7] - P[9][3]*tempVar[6] + P[9][2]*tempVar[5] - P[9][4]*tempVar[4] + P[9][6]*tempVar[3] - P[9][9]*tempVar[1] + P[9][5]*tempVar[0]);
+        Kfusion[10] = -SK_LOS[1]*(P[10][0]*tempVar[8] + P[10][1]*tempVar[7] - P[10][3]*tempVar[6] + P[10][2]*tempVar[5] - P[10][4]*tempVar[4] + P[10][6]*tempVar[3] - P[10][9]*tempVar[1] + P[10][5]*tempVar[0]);
+        Kfusion[11] = -SK_LOS[1]*(P[11][0]*tempVar[8] + P[11][1]*tempVar[7] - P[11][3]*tempVar[6] + P[11][2]*tempVar[5] - P[11][4]*tempVar[4] + P[11][6]*tempVar[3] - P[11][9]*tempVar[1] + P[11][5]*tempVar[0]);
+        Kfusion[12] = -SK_LOS[1]*(P[12][0]*tempVar[8] + P[12][1]*tempVar[7] - P[12][3]*tempVar[6] + P[12][2]*tempVar[5] - P[12][4]*tempVar[4] + P[12][6]*tempVar[3] - P[12][9]*tempVar[1] + P[12][5]*tempVar[0]);
+        // only height measurements are allowed to modify the Z bias state to improve the stability of the estimate
+        Kfusion[13] = 0.0f;//-SK_LOS[1]*(P[13][0]*tempVar[8] + P[13][1]*tempVar[7] - P[13][3]*tempVar[6] + P[13][2]*tempVar[5] - P[13][4]*tempVar[4] + P[13][6]*tempVar[3] - P[13][9]*tempVar[1] + P[13][5]*tempVar[0]);
+        if (inhibitWindStates) {
+            Kfusion[14] = -SK_LOS[1]*(P[14][0]*tempVar[8] + P[14][1]*tempVar[7] - P[14][3]*tempVar[6] + P[14][2]*tempVar[5] - P[14][4]*tempVar[4] + P[14][6]*tempVar[3] - P[14][9]*tempVar[1] + P[14][5]*tempVar[0]);
+            Kfusion[15] = -SK_LOS[1]*(P[15][0]*tempVar[8] + P[15][1]*tempVar[7] - P[15][3]*tempVar[6] + P[15][2]*tempVar[5] - P[15][4]*tempVar[4] + P[15][6]*tempVar[3] - P[15][9]*tempVar[1] + P[15][5]*tempVar[0]);
+        } else {
+            Kfusion[14] = 0.0f;
+            Kfusion[15] = 0.0f;
+        }
+        if (inhibitMagStates) {
+            Kfusion[16] = -SK_LOS[1]*(P[16][0]*tempVar[8] + P[16][1]*tempVar[7] - P[16][3]*tempVar[6] + P[16][2]*tempVar[5] - P[16][4]*tempVar[4] + P[16][6]*tempVar[3] - P[16][9]*tempVar[1] + P[16][5]*tempVar[0]);
+            Kfusion[17] = -SK_LOS[1]*(P[17][0]*tempVar[8] + P[17][1]*tempVar[7] - P[17][3]*tempVar[6] + P[17][2]*tempVar[5] - P[17][4]*tempVar[4] + P[17][6]*tempVar[3] - P[17][9]*tempVar[1] + P[17][5]*tempVar[0]);
+            Kfusion[18] = -SK_LOS[1]*(P[18][0]*tempVar[8] + P[18][1]*tempVar[7] - P[18][3]*tempVar[6] + P[18][2]*tempVar[5] - P[18][4]*tempVar[4] + P[18][6]*tempVar[3] - P[18][9]*tempVar[1] + P[18][5]*tempVar[0]);
+            Kfusion[19] = -SK_LOS[1]*(P[19][0]*tempVar[8] + P[19][1]*tempVar[7] - P[19][3]*tempVar[6] + P[19][2]*tempVar[5] - P[19][4]*tempVar[4] + P[19][6]*tempVar[3] - P[19][9]*tempVar[1] + P[19][5]*tempVar[0]);
+            Kfusion[20] = -SK_LOS[1]*(P[20][0]*tempVar[8] + P[20][1]*tempVar[7] - P[20][3]*tempVar[6] + P[20][2]*tempVar[5] - P[20][4]*tempVar[4] + P[20][6]*tempVar[3] - P[20][9]*tempVar[1] + P[20][5]*tempVar[0]);
+            Kfusion[21] = -SK_LOS[1]*(P[21][0]*tempVar[8] + P[21][1]*tempVar[7] - P[21][3]*tempVar[6] + P[21][2]*tempVar[5] - P[21][4]*tempVar[4] + P[21][6]*tempVar[3] - P[21][9]*tempVar[1] + P[21][5]*tempVar[0]);
+        } else {
+            for (uint8_t i = 16; i <= 21; i++) {
+                Kfusion[i] = 0.0f;
+            }
+        }
+
+        // calculate innovation variance and innovation for X axis observation
+        varInnovOptFlow[0] = 1.0f/SK_LOS[0];
+        innovOptFlow[0] = losPred[0] - flowRadXYcomp[0];
+
+    } else if (obsIndex == 1) {
+
+        // calculate intermediate common variables
+        tempVar[0] = 2.0f*SH_LOS[1]*SK_LOS[8];
+        tempVar[1] = (SK_LOS[2] + q0*tempVar[0]);
+        tempVar[2] = (SK_LOS[5] - q1*tempVar[0]);
+        tempVar[3] = (SK_LOS[3] + q2*tempVar[0]);
+        tempVar[4] = (SK_LOS[4] + q3*tempVar[0]);
+        tempVar[5] = SH_LOS[0]*SK_LOS[8]*(2*q0*q3 + 2*q1*q2);
+        tempVar[6] = SH_LOS[0]*SK_LOS[8]*(2*q0*q2 - 2*q1*q3);
+        tempVar[7] = SH_LOS[0]*SH_LOS[1]*SH_LOS[4];
+        tempVar[8] = SH_LOS[0]*SK_LOS[7]*SK_LOS[8];
+
+        // Calculate observation jacobians for Y LOS rate
+        for (uint8_t i = 0; i < 23; i++) H_LOS[i] = 0;
+        H_LOS[0] = SH_LOS[0]*SH_LOS[3]*(2*q3*ve - 2*q2*vd + 2*q0*vn) + 2*q0*SH_LOS[1]*SH_LOS[3];
+        H_LOS[1] = SH_LOS[0]*SH_LOS[3]*(2*q3*vd + 2*q2*ve + 2*q1*vn) - 2*q1*SH_LOS[1]*SH_LOS[3];
+        H_LOS[2] = - SH_LOS[0]*SH_LOS[3]*(2*q0*vd - 2*q1*ve + 2*q2*vn) - 2*q2*SH_LOS[1]*SH_LOS[3];
+        H_LOS[3] = SH_LOS[0]*SH_LOS[3]*(2*q1*vd + 2*q0*ve - 2*q3*vn) + 2*q3*SH_LOS[1]*SH_LOS[3];
+        H_LOS[4] = SH_LOS[0]*SH_LOS[3]*(sq(q0) + sq(q1) - sq(q2) - sq(q3));
+        H_LOS[5] = SH_LOS[0]*SH_LOS[3]*(2*q0*q3 + 2*q1*q2);
+        H_LOS[6] = -SH_LOS[0]*SH_LOS[3]*(2*q0*q2 - 2*q1*q3);
+        H_LOS[9] = -tempVar[7];
+
+        // Calculate Kalman gains for Y LOS rate
+        Kfusion[0] = SK_LOS[0]*(P[0][0]*tempVar[1] + P[0][1]*tempVar[2] - P[0][2]*tempVar[3] + P[0][3]*tempVar[4] + P[0][5]*tempVar[5] - P[0][6]*tempVar[6] - P[0][9]*tempVar[7] + P[0][4]*tempVar[8]);
+        Kfusion[1] = SK_LOS[0]*(P[1][0]*tempVar[1] + P[1][1]*tempVar[2] - P[1][2]*tempVar[3] + P[1][3]*tempVar[4] + P[1][5]*tempVar[5] - P[1][6]*tempVar[6] - P[1][9]*tempVar[7] + P[1][4]*tempVar[8]);
+        Kfusion[2] = SK_LOS[0]*(P[2][0]*tempVar[1] + P[2][1]*tempVar[2] - P[2][2]*tempVar[3] + P[2][3]*tempVar[4] + P[2][5]*tempVar[5] - P[2][6]*tempVar[6] - P[2][9]*tempVar[7] + P[2][4]*tempVar[8]);
+        Kfusion[3] = SK_LOS[0]*(P[3][0]*tempVar[1] + P[3][1]*tempVar[2] - P[3][2]*tempVar[3] + P[3][3]*tempVar[4] + P[3][5]*tempVar[5] - P[3][6]*tempVar[6] - P[3][9]*tempVar[7] + P[3][4]*tempVar[8]);
+        Kfusion[4] = SK_LOS[0]*(P[4][0]*tempVar[1] + P[4][1]*tempVar[2] - P[4][2]*tempVar[3] + P[4][3]*tempVar[4] + P[4][5]*tempVar[5] - P[4][6]*tempVar[6] - P[4][9]*tempVar[7] + P[4][4]*tempVar[8]);
+        Kfusion[5] = SK_LOS[0]*(P[5][0]*tempVar[1] + P[5][1]*tempVar[2] - P[5][2]*tempVar[3] + P[5][3]*tempVar[4] + P[5][5]*tempVar[5] - P[5][6]*tempVar[6] - P[5][9]*tempVar[7] + P[5][4]*tempVar[8]);
+        Kfusion[6] = SK_LOS[0]*(P[6][0]*tempVar[1] + P[6][1]*tempVar[2] - P[6][2]*tempVar[3] + P[6][3]*tempVar[4] + P[6][5]*tempVar[5] - P[6][6]*tempVar[6] - P[6][9]*tempVar[7] + P[6][4]*tempVar[8]);
+        Kfusion[7] = SK_LOS[0]*(P[7][0]*tempVar[1] + P[7][1]*tempVar[2] - P[7][2]*tempVar[3] + P[7][3]*tempVar[4] + P[7][5]*tempVar[5] - P[7][6]*tempVar[6] - P[7][9]*tempVar[7] + P[7][4]*tempVar[8]);
+        Kfusion[8] = SK_LOS[0]*(P[8][0]*tempVar[1] + P[8][1]*tempVar[2] - P[8][2]*tempVar[3] + P[8][3]*tempVar[4] + P[8][5]*tempVar[5] - P[8][6]*tempVar[6] - P[8][9]*tempVar[7] + P[8][4]*tempVar[8]);
+        Kfusion[9] = SK_LOS[0]*(P[9][0]*tempVar[1] + P[9][1]*tempVar[2] - P[9][2]*tempVar[3] + P[9][3]*tempVar[4] + P[9][5]*tempVar[5] - P[9][6]*tempVar[6] - P[9][9]*tempVar[7] + P[9][4]*tempVar[8]);
+        Kfusion[10] = SK_LOS[0]*(P[10][0]*tempVar[1] + P[10][1]*tempVar[2] - P[10][2]*tempVar[3] + P[10][3]*tempVar[4] + P[10][5]*tempVar[5] - P[10][6]*tempVar[6] - P[10][9]*tempVar[7] + P[10][4]*tempVar[8]);
+        Kfusion[11] = SK_LOS[0]*(P[11][0]*tempVar[1] + P[11][1]*tempVar[2] - P[11][2]*tempVar[3] + P[11][3]*tempVar[4] + P[11][5]*tempVar[5] - P[11][6]*tempVar[6] - P[11][9]*tempVar[7] + P[11][4]*tempVar[8]);
+        Kfusion[12] = SK_LOS[0]*(P[12][0]*tempVar[1] + P[12][1]*tempVar[2] - P[12][2]*tempVar[3] + P[12][3]*tempVar[4] + P[12][5]*tempVar[5] - P[12][6]*tempVar[6] - P[12][9]*tempVar[7] + P[12][4]*tempVar[8]);
+        // only height measurements are allowed to modify the Z bias state to improve the stability of the estimate
+        Kfusion[13] = 0.0f;//SK_LOS[0]*(P[13][0]*tempVar[1] + P[13][1]*tempVar[2] - P[13][2]*tempVar[3] + P[13][3]*tempVar[4] + P[13][5]*tempVar[5] - P[13][6]*tempVar[6] - P[13][9]*tempVar[7] + P[13][4]*tempVar[8]);
+        if (inhibitWindStates) {
+            Kfusion[14] = SK_LOS[0]*(P[14][0]*tempVar[1] + P[14][1]*tempVar[2] - P[14][2]*tempVar[3] + P[14][3]*tempVar[4] + P[14][5]*tempVar[5] - P[14][6]*tempVar[6] - P[14][9]*tempVar[7] + P[14][4]*tempVar[8]);
+            Kfusion[15] = SK_LOS[0]*(P[15][0]*tempVar[1] + P[15][1]*tempVar[2] - P[15][2]*tempVar[3] + P[15][3]*tempVar[4] + P[15][5]*tempVar[5] - P[15][6]*tempVar[6] - P[15][9]*tempVar[7] + P[15][4]*tempVar[8]);
+        } else {
+            Kfusion[14] = 0.0f;
+            Kfusion[15] = 0.0f;
+        }
+        if (inhibitMagStates) {
+        Kfusion[16] = SK_LOS[0]*(P[16][0]*tempVar[1] + P[16][1]*tempVar[2] - P[16][2]*tempVar[3] + P[16][3]*tempVar[4] + P[16][5]*tempVar[5] - P[16][6]*tempVar[6] - P[16][9]*tempVar[7] + P[16][4]*tempVar[8]);
+        Kfusion[17] = SK_LOS[0]*(P[17][0]*tempVar[1] + P[17][1]*tempVar[2] - P[17][2]*tempVar[3] + P[17][3]*tempVar[4] + P[17][5]*tempVar[5] - P[17][6]*tempVar[6] - P[17][9]*tempVar[7] + P[17][4]*tempVar[8]);
+        Kfusion[18] = SK_LOS[0]*(P[18][0]*tempVar[1] + P[18][1]*tempVar[2] - P[18][2]*tempVar[3] + P[18][3]*tempVar[4] + P[18][5]*tempVar[5] - P[18][6]*tempVar[6] - P[18][9]*tempVar[7] + P[18][4]*tempVar[8]);
+        Kfusion[19] = SK_LOS[0]*(P[19][0]*tempVar[1] + P[19][1]*tempVar[2] - P[19][2]*tempVar[3] + P[19][3]*tempVar[4] + P[19][5]*tempVar[5] - P[19][6]*tempVar[6] - P[19][9]*tempVar[7] + P[19][4]*tempVar[8]);
+        Kfusion[20] = SK_LOS[0]*(P[20][0]*tempVar[1] + P[20][1]*tempVar[2] - P[20][2]*tempVar[3] + P[20][3]*tempVar[4] + P[20][5]*tempVar[5] - P[20][6]*tempVar[6] - P[20][9]*tempVar[7] + P[20][4]*tempVar[8]);
+        Kfusion[21] = SK_LOS[0]*(P[21][0]*tempVar[1] + P[21][1]*tempVar[2] - P[21][2]*tempVar[3] + P[21][3]*tempVar[4] + P[21][5]*tempVar[5] - P[21][6]*tempVar[6] - P[21][9]*tempVar[7] + P[21][4]*tempVar[8]);
+        } else {
+            for (uint8_t i = 16; i <= 21; i++) {
+                Kfusion[i] = 0.0f;
+            }
+        }
+
+        // calculate variance and innovation for Y observation
+        varInnovOptFlow[1] = 1.0f/SK_LOS[1];
+        innovOptFlow[1] = losPred[1] - flowRadXYcomp[1];
+
+    }
+
+    // calculate the innovation consistency test ratio
+    flowTestRatio[obsIndex] = sq(innovOptFlow[obsIndex]) / (sq(_flowInnovGate) * varInnovOptFlow[obsIndex]);
+
+    // Check the innovation for consistency and don't fuse if out of bounds or flow is too fast to be reliable
+    if ((flowTestRatio[obsIndex]) < 1.0f && (flowRadXY[obsIndex] < _maxFlowRate)) {
+        // Reset the timer for velocity fusion timeout. This prevents a velocity timeout from being declared if we have to momentarily go into velocity hold mode.
+        velFailTime = imuSampleTime_ms;
+        // correct the state vector
+        for (uint8_t j = 0; j <= 21; j++)
+        {
+            states[j] = states[j] - Kfusion[j] * innovOptFlow[obsIndex];
+        }
+        // Attitude, velocity and position corrections are averaged across multiple prediction cycles between now and the anticipated time for the next measurement.
+        // Don't do averaging of quaternion state corrections if total angle change across predicted interval is going to exceed 0.1 rad
+        bool highRates = ((flowUpdateCountMax * correctedDelAng.length()) > 0.1f);
+        // Calculate the number of averaging frames left to go. This is required because flow fusion is applied across two consecutive prediction cycles
+        // There is no point averaging if the number of cycles left is less than 2
+        float minorFramesToGo = float(flowUpdateCountMax) - float(flowUpdateCount);
+        for (uint8_t i = 0; i<=21; i++) {
+            if ((i <= 3 && highRates) || i >= 10 || minorFramesToGo < 1.5f) {
+                states[i] = states[i] - Kfusion[i] * innovOptFlow[obsIndex];
+            } else {
+                    flowIncrStateDelta[i] -= Kfusion[i] * innovOptFlow[obsIndex] * (flowUpdateCountMaxInv * float(flowUpdateCountMax) / minorFramesToGo);
+            }
+        }
+        // normalise the quaternion states
+        state.quat.normalize();
+        // correct the covariance P = (I - K*H)*P
+        // take advantage of the empty columns in KH to reduce the
+        // number of operations
+        for (uint8_t i = 0; i <= 21; i++)
+        {
+            for (uint8_t j = 0; j <= 6; j++)
+            {
+                KH[i][j] = Kfusion[i] * H_LOS[j];
+            }
+            for (uint8_t j = 7; j <= 8; j++)
+            {
+                KH[i][j] = 0.0f;
+            }
+            KH[i][9] = Kfusion[i] * H_LOS[9];
+            for (uint8_t j = 10; j <= 21; j++)
+            {
+                KH[i][j] = 0.0f;
+            }
+        }
+        for (uint8_t i = 0; i <= 21; i++)
+        {
+            for (uint8_t j = 0; j <= 21; j++)
+            {
+                KHP[i][j] = 0.0f;
+                for (uint8_t k = 0; k <= 6; k++)
+                {
+                    KHP[i][j] = KHP[i][j] + KH[i][k] * P[k][j];
+                }
+                KHP[i][j] = KHP[i][j] + KH[i][9] * P[9][j];
+            }
+        }
+        for (uint8_t i = 0; i <=  21; i++)
+        {
+            for (uint8_t j = 0; j <=  21; j++)
+            {
+                P[i][j] = P[i][j] - KHP[i][j];
+            }
+        }
+    }
+
+    ForceSymmetry();
+    ConstrainVariances();
+
+    // stop the performance timer
+    perf_end(_perf_FuseOptFlow);
 }
 
 // fuse true airspeed measurements
@@ -2399,11 +3205,8 @@ void NavEKF::FuseAirspeed()
                 states[j] = states[j] - Kfusion[j] * innovVtas;
             }
 
-            Quaternion q(states[0], states[1], states[2], states[3]);
-            q.normalize();
-            for (uint8_t i = 0; i<=3; i++) {
-                states[i] = q[i];
-            }
+            state.quat.normalize();
+
             // correct the covariance P = (I - K*H)*P
             // take advantage of the empty columns in H to reduce the number of operations
             for (uint8_t i = 0; i<=21; i++)
@@ -2477,15 +3280,15 @@ void NavEKF::FuseSideslip()
     float innovBeta;
 
     // copy required states to local variable names
-    q0 = states[0];
-    q1 = states[1];
-    q2 = states[2];
-    q3 = states[3];
-    vn = states[4];
-    ve = states[5];
-    vd = states[6];
-    vwn = states[14];
-    vwe = states[15];
+    q0 = state.quat[0];
+    q1 = state.quat[1];
+    q2 = state.quat[2];
+    q3 = state.quat[3];
+    vn = state.velocity.x;
+    ve = state.velocity.y;
+    vd = state.velocity.z;
+    vwn = state.wind_vel.x;
+    vwe = state.wind_vel.y;
 
     // calculate predicted wind relative velocity in NED
     vel_rel_wind.x = vn - vwn;
@@ -2593,11 +3396,8 @@ void NavEKF::FuseSideslip()
             states[j] = states[j] - Kfusion[j] * innovBeta;
         }
 
-        Quaternion q(states[0], states[1], states[2], states[3]);
-        q.normalize();
-        for (uint8_t i = 0; i<=3; i++) {
-            states[i] = q[i];
-        }
+        state.quat.normalize();
+
         // correct the covariance P = (I - K*H)*P
         // take advantage of the empty columns in H to reduce the
         // number of operations
@@ -2670,8 +3470,8 @@ void NavEKF::zeroCols(Matrix22 &covMat, uint8_t first, uint8_t last)
 void NavEKF::StoreStates()
 {
     // Don't need to store states more often than every 10 msec
-    if (hal.scheduler->millis() - lastStateStoreTime_ms >= 10) {
-        lastStateStoreTime_ms = hal.scheduler->millis();
+    if (imuSampleTime_ms - lastStateStoreTime_ms >= 10) {
+        lastStateStoreTime_ms = imuSampleTime_ms;
         if (storeIndex > 49) {
             storeIndex = 0;
         }
@@ -2690,7 +3490,7 @@ void NavEKF::StoreStatesReset()
     // store current state vector in first column
     storeIndex = 0;
     storedStates[storeIndex] = state;
-    statetimeStamp[storeIndex] = hal.scheduler->millis();
+    statetimeStamp[storeIndex] = imuSampleTime_ms;
     storeIndex = storeIndex + 1;
 }
 
@@ -2719,6 +3519,29 @@ void NavEKF::RecallStates(state_elements &statesForFusion, uint32_t msec)
     }
 }
 
+// recall omega (angular rate vector) average across the time interval from msecStart to msecEnd
+void NavEKF::RecallOmega(Vector3f &omegaAvg, uint32_t msecStart, uint32_t msecEnd)
+{
+    // calculate average angular rate vector over the time interval from msecStart to msecEnd
+    // if no values are inside the time window, return the current angular rate
+    omegaAvg.zero();
+    uint8_t numAvg = 0;
+    for (uint8_t i=0; i<=49; i++)
+    {
+        if (msecStart <= statetimeStamp[i] && msecEnd >= statetimeStamp[i])
+        {
+            omegaAvg += storedStates[i].omega;
+            numAvg += 1;
+        }
+    }
+    if (numAvg >= 1)
+    {
+        omegaAvg = omegaAvg / float(numAvg);
+    } else {
+        omegaAvg = correctedDelAng * (1.0f * dtIMUinv);
+    }
+}
+
 // calculate nav to body quaternions from body to nav rotation matrix
 void NavEKF::quat2Tbn(Matrix3f &Tbn, const Quaternion &quat) const
 {
@@ -2729,26 +3552,34 @@ void NavEKF::quat2Tbn(Matrix3f &Tbn, const Quaternion &quat) const
 // return the Euler roll, pitch and yaw angle in radians
 void NavEKF::getEulerAngles(Vector3f &euler) const
 {
-    Quaternion q(states[0], states[1], states[2], states[3]);
-    q.to_euler(&euler.x, &euler.y, &euler.z);
+    state.quat.to_euler(euler.x, euler.y, euler.z);
     euler = euler - _ahrs->get_trim();
+}
+
+// This returns the specific forces in the NED frame
+void NavEKF::getAccelNED(Vector3f &accelNED) const {
+    accelNED = velDotNED;
+    accelNED.z -= GRAVITY_MSS;
 }
 
 // return NED velocity in m/s
 void NavEKF::getVelNED(Vector3f &vel) const
 {
-    vel.x = states[4];
-    vel.y = states[5];
-    vel.z = states[6];
+    vel = state.velocity;
 }
 
 // return the last calculated NED position relative to the reference point (m).
 // return false if no position is available
 bool NavEKF::getPosNED(Vector3f &pos) const
 {
-    pos.x = states[7];
-    pos.y = states[8];
-    pos.z = states[9];
+    pos.x = state.position.x;
+    pos.y = state.position.y;
+    // If relying on optical flow, then output ground relative position so that the vehicle does terain following
+    if (_fusionModeGPS == 3) {
+        pos.z = state.position.z - flowStates[1];
+    } else {
+        pos.z = state.position.z;
+    }
     return true;
 }
 
@@ -2759,46 +3590,91 @@ void NavEKF::getGyroBias(Vector3f &gyroBias) const
         gyroBias.zero();
         return;
     }
-    gyroBias.x = states[10] / dtIMU;
-    gyroBias.y = states[11] / dtIMU;
-    gyroBias.z = states[12] / dtIMU;
+    gyroBias = state.gyro_bias / dtIMU;
 }
 
-// return weighting of first IMU in blending function and the individual Z-accel bias estimates in m/s^2
-void NavEKF::getAccelBias(Vector3f &accelBias) const
+// reset the body axis gyro bias states to zero and re-initialise the corresponding covariances
+void NavEKF::resetGyroBias(void)
 {
-    accelBias.x = IMU1_weighting;
-    if (dtIMU == 0) {
-        accelBias.y = 0;
-        accelBias.z = 0;
+    state.gyro_bias.zero();
+    zeroRows(P,10,12);
+    zeroCols(P,10,12);
+    P[10][10] = sq(radians(INIT_GYRO_BIAS_UNCERTAINTY * dtIMU));
+    P[11][11] = P[10][10];
+    P[12][12] = P[10][10];
+
+}
+
+// Commands the EKF to not use GPS.
+// This command must be sent prior to arming as it will only be actioned when the filter is in static mode
+// This command is forgotten by the EKF each time it goes back into static mode (eg the vehicle disarms)
+// Returns 0 if command rejected
+// Returns 1 if attitude, vertical velocity and vertical position will be provided
+// Returns 2 if attitude, 3D-velocity, vertical position and relative horizontal position will be provided
+uint8_t NavEKF::setInhibitGPS(void)
+{
+    if(!staticMode) {
+        return 0;
+    }
+    if (useOptFlow()) {
+        gpsInhibitMode = 2;
+        return 2;
     } else {
-        accelBias.y = states[22] / dtIMU;
-        accelBias.z = states[13] / dtIMU;
+        gpsInhibitMode = 1;
+        return 1;
+    }
+}
+
+// return the horizontal speed limit in m/s set by optical flow sensor limits
+// return the scale factor to be applied to navigation velocity gains to compensate for increase in velocity noise with height when using optical flow
+void NavEKF::getEkfControlLimits(float &ekfGndSpdLimit, float &ekfNavVelGainScaler) const
+{
+    if (useOptFlow() || gpsInhibitMode == 2) {
+        // allow 1.0 rad/sec margin for angular motion
+        ekfGndSpdLimit = max((_maxFlowRate - 1.0f), 0.0f) * max((flowStates[1] - state.position[2]), 0.1f);
+        // use standard gains up to 5.0 metres height and reduce above that
+        ekfNavVelGainScaler = 4.0f / max((flowStates[1] - state.position[2]),4.0f);
+    } else {
+        ekfGndSpdLimit = 400.0f; //return 80% of max filter speed
+        ekfNavVelGainScaler = 1.0f;
+    }
+}
+
+// return weighting of first IMU in blending function
+void NavEKF::getIMU1Weighting(float &ret) const
+{
+    ret = IMU1_weighting;
+}
+
+// return the individual Z-accel bias estimates in m/s^2
+void NavEKF::getAccelZBias(float &zbias1, float &zbias2) const {
+    if (dtIMU == 0) {
+        zbias1 = 0;
+        zbias2 = 0;
+    } else {
+        zbias1 = state.accel_zbias1 * dtIMUinv;
+        zbias2 = state.accel_zbias2 * dtIMUinv;
     }
 }
 
 // return the NED wind speed estimates in m/s (positive is air moving in the direction of the axis)
 void NavEKF::getWind(Vector3f &wind) const
 {
-    wind.x = states[14];
-    wind.y = states[15];
+    wind.x = state.wind_vel.x;
+    wind.y = state.wind_vel.y;
     wind.z = 0.0f; // currently don't estimate this
 }
 
 // return earth magnetic field estimates in measurement units / 1000
 void NavEKF::getMagNED(Vector3f &magNED) const
 {
-    magNED.x = states[16]*1000.0f;
-    magNED.y = states[17]*1000.0f;
-    magNED.z = states[18]*1000.0f;
+    magNED = state.earth_magfield * 1000.0f;
 }
 
 // return body magnetic field estimates in measurement units / 1000
 void NavEKF::getMagXYZ(Vector3f &magXYZ) const
 {
-    magXYZ.x = states[19]*1000.0f;
-    magXYZ.y = states[20]*1000.0f;
-    magXYZ.z = states[21]*1000.0f;
+    magXYZ = state.body_magfield*1000.0f;
 }
 
 // return the last calculated latitude, longitude and height
@@ -2806,46 +3682,110 @@ bool NavEKF::getLLH(struct Location &loc) const
 {
     loc.lat = _ahrs->get_home().lat;
     loc.lng = _ahrs->get_home().lng;
-    loc.alt = _ahrs->get_home().alt - states[9]*100;
-    location_offset(loc, states[7], states[8]);
+    loc.alt = _ahrs->get_home().alt - state.position.z*100;
+    loc.flags.relative_alt = 0;
+    loc.flags.terrain_alt = 0;
+    location_offset(loc, state.position.x, state.position.y);
     return true;
+}
+
+// return the estimated height above ground level
+bool NavEKF::getHAGL(float &HAGL) const
+{
+    HAGL = flowStates[1] - state.position.z;
+    return !inhibitGndState;
+}
+
+// return data for debugging optical flow fusion
+void NavEKF::getFlowDebug(float &scaleFactor, float &gndPos, float &flowInnovX, float &flowInnovY, float &augFlowInnovX, float &augFlowInnovY, float &rngInnov, float &range) const
+{
+    scaleFactor = flowStates[0];
+    gndPos = flowStates[1];
+    flowInnovX = innovOptFlow[0];
+    flowInnovY = innovOptFlow[1];
+    augFlowInnovX = auxFlowObsInnov[0];
+    augFlowInnovY = auxFlowObsInnov[1];
+    rngInnov = innovRng;
+    range = rngMea;
 }
 
 // calculate whether the flight vehicle is on the ground or flying from height, airspeed and GPS speed
 void NavEKF::SetFlightAndFusionModes()
 {
-    const AP_Airspeed *airspeed = _ahrs->get_airspeed();
-    uint8_t highAirSpd = (airspeed && airspeed->use() && airspeed->get_airspeed() * airspeed->get_EAS2TAS() > 8.0f);
-    float gndSpdSq = sq(velNED[0]) + sq(velNED[1]);
-    uint8_t highGndSpdStage1 = (uint8_t)(gndSpdSq > 9.0f);
-    uint8_t highGndSpdStage2 = (uint8_t)(gndSpdSq > 36.0f);
-    uint8_t highGndSpdStage3 = (uint8_t)(gndSpdSq > 81.0f);
-    uint8_t largeHgt = (uint8_t)(fabsf(hgtMea) > 15.0f);
-    uint8_t inAirSum = highAirSpd + highGndSpdStage1 + highGndSpdStage2 + highGndSpdStage3 + largeHgt;
-    // if magnetometer calibration mode 1 is selected, use a manoeuvre threshold test
-    // otherwise use a height and velocity test
-    if ((_magCal == 1)  && (accNavMagHoriz > 0.5f) && !static_mode_demanded() && use_compass()) {
-        onGround = false;
+    // determine if the vehicle is manoevring
+    if (accNavMagHoriz > 0.5f){
+        manoeuvring = true;
     } else {
-        // detect on-ground to in-air transition
-        // if we are already on the ground then 3 or more out of 5 criteria are required
-        // if we are in the air then only 2 or more are required
-        // this prevents rapid tansitions
-        if ((onGround && (inAirSum >= 3)) || (!onGround && (inAirSum >= 2))) {
+        manoeuvring = false;
+    }
+    // if we are a fly forward type vehicle, then in-air mode can be determined through a combination of speed and height criteria
+    if (assume_zero_sideslip()) {
+        // Evaluate a numerical score that defines the likelihood we are in the air
+        const AP_Airspeed *airspeed = _ahrs->get_airspeed();
+        float gndSpdSq = sq(velNED[0]) + sq(velNED[1]);
+        uint8_t inAirSum = 0;
+        bool highGndSpdStage2 = false;
+
+        // trigger at 8 m/s airspeed
+        if (airspeed && airspeed->use() && airspeed->get_airspeed() * airspeed->get_EAS2TAS() > 8.0f) {
+            inAirSum++;
+        }
+
+        // this will trigger during change in baro height
+        if (fabsf(_baro.get_climb_rate()) > 0.5f) {
+
+            inAirSum++;
+        }
+
+        // trigger at 3 m/s GPS velocity
+        if (gndSpdSq > 9.0f) {
+            inAirSum++;
+        }
+
+        // trigger at 6 m/s GPS velocity
+        if (gndSpdSq > 36.0f) {
+            highGndSpdStage2 = true;
+            inAirSum++;
+        }
+
+        // trigger at 9 m/s GPS velocity
+        if (gndSpdSq > 81.0f) {
+            inAirSum++;
+        }
+
+        // trigger if more than 15m away from initial height
+        if (fabsf(hgtMea) > 15.0f) {
+            inAirSum++;
+        }
+
+        // this will trigger due to air turbulence during flight
+        if (accNavMag > 0.5f) {
+            inAirSum++;
+        }
+
+        // if we on-ground then 4 or more out of 7 criteria are required to transition to the
+        // in-air mode and we also need enough GPS velocity to be able to calculate a reliable ground track heading
+        if (onGround && (inAirSum >= 4) && highGndSpdStage2) {
             onGround = false;
-        } else {
+        }
+        // if is possible we are in flight, set the time this condition was last detected
+        if (inAirSum >= 1) {
+            airborneDetectTime_ms = imuSampleTime_ms;
+        }
+        // after 5 seconds of not detecting a possible flight condition, we transition to on-ground mode
+        if(!onGround && ((imuSampleTime_ms - airborneDetectTime_ms) > 5000)) {
             onGround = true;
         }
-        // force a yaw alignment if exiting onGround without a compass or if compass is timed out and we are a fly forward vehicle
-        if (!onGround && prevOnGround && (!use_compass() || (magTimeout && assume_zero_sideslip()))) {
+        // perform a yaw alignment check against GPS if exiting on-ground mode
+        // this is done to protect against unrecoverable heading alignment errors due to compass faults
+        if (!onGround && prevOnGround) {
             alignYawGPS();
         }
-        // If we are flying a fly-forward type vehicle without an airspeed sensor and exiting onGround
-        // we set the wind velocity to the reciprocal of the velocity vector and scale states so that the
-        // wind speed is equal to the 6m/s. This prevents gains being too high at the start
-        // of flight if launching into a headwind until the first turn when the EKF can form a  wind speed
-        // estimate
-        if (!onGround && prevOnGround && !useAirspeed() && assume_zero_sideslip()) {
+        // If we aren't using an airspeed sensor we set the wind velocity to the reciprocal
+        // of the velocity vector and scale states so that the wind speed is equal to 3m/s. This helps prevent gains
+        // being too high at the start of flight if launching into a headwind until the first turn when the EKF can form
+        // a wind speed estimate and also corrects bad initial wind estimates due to heading errors
+        if (!onGround && prevOnGround && !useAirspeed()) {
             setWindVelStates();
         }
     }
@@ -2853,8 +3793,12 @@ void NavEKF::SetFlightAndFusionModes()
     prevOnGround = onGround;
     // If we are on ground, or in static mode, or don't have the right vehicle and sensing to estimate wind, inhibit wind states
     inhibitWindStates = ((!useAirspeed() && !assume_zero_sideslip()) || onGround || staticMode);
-    // If magnetometer calibration mode is turned off by the user or we are on ground or in static mode, then inhibit magnetometer states
-    inhibitMagStates  = ((_magCal == 2) || !use_compass() || onGround || staticMode);
+    // request mag calibration for both in-air and manoeuvre threshold options
+    bool magCalRequested = ((_magCal == 0) && !onGround) || ((_magCal == 1) && manoeuvring);
+    // deny mag calibration request if we aren't using the compass, are in the pre-arm static mode or it has been inhibited by the user
+    bool magCalDenied = (!use_compass() || staticMode || (_magCal == 2));
+    // inhibit the magnetic field calibration if not requested or denied
+    inhibitMagStates = (!magCalRequested || magCalDenied);
 }
 
 // initialise the covariance matrix
@@ -2882,7 +3826,7 @@ void NavEKF::CovarianceInit()
     P[8][8]   = P[7][7];
     P[9][9]   = sq(5.0f);
     // delta angle biases
-    P[10][10] = sq(radians(0.1f * dtIMU));
+    P[10][10] = sq(radians(INIT_GYRO_BIAS_UNCERTAINTY * dtIMU));
     P[11][11] = P[10][10];
     P[12][12] = P[10][10];
     // Z delta velocity bias
@@ -2898,6 +3842,12 @@ void NavEKF::CovarianceInit()
     P[19][19] = 0.0f;
     P[20][20] = P[19][19];
     P[21][21] = P[19][19];
+
+    // optical flow focal length scale factor
+    Popt[0][0] = 0.0f;
+    // ground height
+    Popt[0][0] = 0.25f;
+
 }
 
 // force symmetry on the covariance matrix to prevent ill-conditioning
@@ -2907,15 +3857,6 @@ void NavEKF::ForceSymmetry()
     {
         for (uint8_t j=0; j<=i-1; j++)
         {
-            if (fabsf(P[i][j]) > EKF_COVARIENCE_MAX ||
-                fabsf(P[j][i]) > EKF_COVARIENCE_MAX) {
-                // set the filter status as diverged and re-initialise the filter
-                filterDiverged = true;
-                faultStatus.diverged = true;
-                lastDivergeTime_ms = hal.scheduler->millis();
-                InitialiseFilterDynamic();
-                return;
-            }
             float temp = 0.5f*(P[i][j] + P[j][i]);
             P[i][j] = temp;
             P[j][i] = temp;
@@ -2983,13 +3924,13 @@ void NavEKF::readIMUData()
     Vector3f accel1;    // acceleration vector in XYZ body axes measured by IMU1 (m/s^2)
     Vector3f accel2;    // acceleration vector in XYZ body axes measured by IMU2 (m/s^2)
 
-    // get the time the IMU data was read
-    IMUmsec = hal.scheduler->millis();
+    // the imu sample time is sued as a common time reference throughout the filter
+    imuSampleTime_ms = hal.scheduler->millis();
 
     // limit IMU delta time to prevent numerical problems elsewhere
     dtIMU = constrain_float(_ahrs->get_ins().get_delta_time(), 0.001f, 1.0f);
 
-    // get accels and gyro data from dual sensors if healthy
+    // get accel and gyro data from dual sensors if healthy
     if (_ahrs->get_ins().get_accel_health(0) && _ahrs->get_ins().get_accel_health(1)) {
         accel1 = _ahrs->get_ins().get_accel(0);
         accel2 = _ahrs->get_ins().get_accel(1);
@@ -3038,11 +3979,20 @@ void NavEKF::readGpsData()
 
         // get state vectors that were stored at the time that is closest to when the the GPS measurement
         // time after accounting for measurement delays
-        RecallStates(statesAtVelTime, (IMUmsec - constrain_int16(_msecVelDelay, 0, 500)));
-        RecallStates(statesAtPosTime, (IMUmsec - constrain_int16(_msecPosDelay, 0, 500)));
+        RecallStates(statesAtVelTime, (imuSampleTime_ms - constrain_int16(_msecVelDelay, 0, 500)));
+        RecallStates(statesAtPosTime, (imuSampleTime_ms - constrain_int16(_msecPosDelay, 0, 500)));
 
         // read the NED velocity from the GPS
         velNED = _ahrs->get_gps().velocity();
+
+        // check if we have enough GPS satellites and increase the gps noise scaler if we don't
+        if (_ahrs->get_gps().num_sats() >= 6) {
+            gpsNoiseScaler = 1.0f;
+        } else if (_ahrs->get_gps().num_sats() == 5) {
+            gpsNoiseScaler = 1.4f;
+        } else { // <= 4 satellites
+            gpsNoiseScaler = 2.0f;
+        }
 
         // Check if GPS can output vertical velocity and set GPS fusion mode accordingly
         if (!_ahrs->get_gps().have_vertical_velocity()) {
@@ -3069,14 +4019,14 @@ void NavEKF::readHgtData()
         lastHgtMeasTime = _baro.get_last_update();
 
         // time stamp used to check for timeout
-        lastHgtTime_ms = hal.scheduler->millis();
+        lastHgtTime_ms = imuSampleTime_ms;
 
         // get measurement and set flag to let other functions know new data has arrived
         hgtMea = _baro.get_altitude();
         newDataHgt = true;
 
         // get states that wer stored at the time closest to the measurement time, taking measurement delay into account
-        RecallStates(statesAtHgtTime, (IMUmsec - _msecHgtDelay));
+        RecallStates(statesAtHgtTime, (imuSampleTime_ms - _msecHgtDelay));
     } else {
         newDataHgt = false;
     }
@@ -3089,14 +4039,11 @@ void NavEKF::readMagData()
         // store time of last measurement update
         lastMagUpdate = _ahrs->get_compass()->last_update;
 
-        // read compass data and assign to bias and uncorrected measurement
-        // body fixed magnetic bias is opposite sign to APM compass offsets
-        // we scale compass data to improve numerical conditioning
-        magBias = -_ahrs->get_compass()->get_offsets() * 0.001f;
-        magData = _ahrs->get_compass()->get_field() * 0.001f + magBias;
+        // read compass data and scale to improve numerical conditioning
+        magData = _ahrs->get_compass()->get_field() * 0.001f;
 
         // get states stored at time closest to measurement time after allowance for measurement delay
-        RecallStates(statesAtMagMeasTime, (IMUmsec - _msecMagDelay));
+        RecallStates(statesAtMagMeasTime, (imuSampleTime_ms - _msecMagDelay));
 
         // let other processes know that new compass data has arrived
         newDataMag = true;
@@ -3118,9 +4065,61 @@ void NavEKF::readAirSpdData()
         VtasMeas = aspeed->get_airspeed() * aspeed->get_EAS2TAS();
         lastAirspeedUpdate = aspeed->last_update_ms();
         newDataTas = true;
-        RecallStates(statesAtVtasMeasTime, (IMUmsec - _msecTasDelay));
+        RecallStates(statesAtVtasMeasTime, (imuSampleTime_ms - _msecTasDelay));
     } else {
         newDataTas = false;
+    }
+}
+
+// write the raw optical flow measurements
+// this needs to be called externally.
+void NavEKF::writeOptFlowMeas(uint8_t &rawFlowQuality, Vector2f &rawFlowRates, Vector2f &rawGyroRates, uint32_t &msecFlowMeas, uint8_t &rangeHealth, float &rawSonarRange)
+{
+    // The raw measurements need to be optical flow rates in radians/second averaged across the time since the last update
+    // The PX4Flow sensor outputs flow rates with the following axis and sign conventions:
+    // A positive X rate is produced by a positive velocity over ground in the X direction
+    // A positive Y rate is produced by a positive velocity over ground in the Y direction
+    // This filter uses a different definition of optical flow rates to the sensor with a positive optical flow rate produced by a
+    // negative rotation about that axis. For example a positive rotation of the flight vehicle about its X (roll) axis would produce a negative X flow rate
+    flowQuality = rawFlowQuality;
+    // recall angular rates averaged across flow observation period allowing for processing, transmission and intersample delays
+    RecallOmega(omegaAcrossFlowTime, imuSampleTime_ms - flowTimeDeltaAvg_ms - _msecFLowDelay, imuSampleTime_ms - _msecFLowDelay);
+    // calculate bias errors on flow sensor gyro rates, but protect against spikes in data
+    flowGyroBias.x = 0.99f * flowGyroBias.x + 0.01f * constrain_float((rawGyroRates.x - omegaAcrossFlowTime.x),-0.1f,0.1f);
+    flowGyroBias.y = 0.99f * flowGyroBias.y + 0.01f * constrain_float((rawGyroRates.y - omegaAcrossFlowTime.y),-0.1f,0.1f);
+    // don't use data with a low quality indicator or extreme rates (helps catch corrupt sesnor data)
+    if (rawFlowQuality > 50 && rawFlowRates.length() < 4.2f && rawGyroRates.length() < 4.2f) {
+        // recall vehicle states at mid sample time for flow observations allowing for delays
+        RecallStates(statesAtFlowTime, imuSampleTime_ms - _msecFLowDelay - flowTimeDeltaAvg_ms/2);
+        // calculate rotation matrices at mid sample time for flow observations
+        Quaternion q(statesAtFlowTime.quat[0],statesAtFlowTime.quat[1],statesAtFlowTime.quat[2],statesAtFlowTime.quat[3]);
+        q.rotation_matrix(Tbn_flow);
+        Tnb_flow = Tbn_flow.transposed();
+        // correct flow sensor rates for bias
+        omegaAcrossFlowTime.x = rawGyroRates.x - flowGyroBias.x;
+        omegaAcrossFlowTime.y = rawGyroRates.y - flowGyroBias.y;
+        // write uncorrected flow rate measurements that will be used by the focal length scale factor estimator
+        // note correction for different axis and sign conventions used by the px4flow sensor
+        flowRadXY[0] = - rawFlowRates.x; // raw (non motion compensated) optical flow angular rate about the X axis (rad/sec)
+        flowRadXY[1] = - rawFlowRates.y; // raw (non motion compensated) optical flow angular rate about the Y axis (rad/sec)
+        // write flow rate measurements corrected for focal length scale factor errors and body rates
+        flowRadXYcomp[0] = flowStates[0]*flowRadXY[0] + omegaAcrossFlowTime.x;
+        flowRadXYcomp[1] = flowStates[0]*flowRadXY[1] + omegaAcrossFlowTime.y;
+        // set flag that will trigger observations
+        newDataFlow = true;
+        velHoldMode = false;
+        flowMeaTime_ms = imuSampleTime_ms;
+    } else {
+        newDataFlow = false;
+    }
+    // Use range finder if 3 or more consecutive good samples. This reduces likelihood of using bad data.
+    if (rangeHealth >= 3) {
+        statesAtRngTime = statesAtFlowTime;
+        rngMea = rawSonarRange;
+        newDataRng = true;
+        rngMeaTime_ms = imuSampleTime_ms;
+    } else {
+        newDataRng = false;
     }
 }
 
@@ -3135,7 +4134,7 @@ void NavEKF::calcEarthRateNED(Vector3f &omega, int32_t latitude) const
 
 // initialise the earth magnetic field states using declination, suppled roll/pitch
 // and magnetometer measurements and return initial attitude quaternion
-// if no magnetometer data, do not update amgentic field states and assume zero yaw angle
+// if no magnetometer data, do not update magnetic field states and assume zero yaw angle
 Quaternion NavEKF::calcQuatAndFieldStates(float roll, float pitch)
 {
     // declare local variables required to calculate initial orientation and magnetic field
@@ -3152,7 +4151,7 @@ Quaternion NavEKF::calcQuatAndFieldStates(float roll, float pitch)
         readMagData();
 
         // rotate the magnetic field into NED axes
-        initMagNED = Tbn*(magData - magBias);
+        initMagNED = Tbn * magData;
 
         // calculate heading of mag field rel to body heading
         float magHeading = atan2f(initMagNED.y, initMagNED.x);
@@ -3163,17 +4162,24 @@ Quaternion NavEKF::calcQuatAndFieldStates(float roll, float pitch)
         // calculate yaw angle rel to true north
         yaw = magDecAng - magHeading;
         yawAligned = true;
-
-        // calculate initial filter quaternion states
-        initQuat.from_euler(roll, pitch, yaw);
+        // calculate initial filter quaternion states using yaw from magnetometer if mag heading healthy
+        // otherwise use existing heading
+        if (!badMag) {
+            initQuat.from_euler(roll, pitch, yaw);
+        } else {
+            initQuat = state.quat;
+        }
 
         // calculate initial Tbn matrix and rotate Mag measurements into NED
         // to set initial NED magnetic field states
         initQuat.rotation_matrix(Tbn);
-        initMagNED = Tbn * (magData - magBias);
+        initMagNED = Tbn * magData;
 
         // write to earth magnetic field state vector
         state.earth_magfield = initMagNED;
+
+        // clear bad magnetometer status
+        badMag = false;
     } else {
         initQuat.from_euler(roll, pitch, 0.0f);
         yawAligned = false;
@@ -3183,37 +4189,38 @@ Quaternion NavEKF::calcQuatAndFieldStates(float roll, float pitch)
     return initQuat;
 }
 
-// this function is used to do a forced alignment of the yaw angle to aligwith the horizontal velocity
-// vector from GPS. It is used to align the yaw angle after launch or takeoff without a magnetometer.
+// this function is used to do a forced alignment of the yaw angle to align with the horizontal velocity
+// vector from GPS. It is used to align the yaw angle after launch or takeoff.
 void NavEKF::alignYawGPS()
 {
-    if ((sq(velNED[0]) + sq(velNED[1])) > 16.0f) {
+    if ((sq(velNED[0]) + sq(velNED[1])) > 25.0f) {
         float roll;
         float pitch;
         float oldYaw;
         float newYaw;
         float yawErr;
         // get quaternion from existing filter states and calculate roll, pitch and yaw angles
-        Quaternion initQuat;
-        Quaternion newQuat;
-        for (uint8_t i=0; i<=3; i++) initQuat[i] = states[i];
-        initQuat.to_euler(&roll, &pitch, &oldYaw);
+        state.quat.to_euler(roll, pitch, oldYaw);
+        // calculate course yaw angle
+        oldYaw = atan2f(state.velocity.y,state.velocity.x);
         // calculate yaw angle from GPS velocity
         newYaw = atan2f(velNED[1],velNED[0]);
-        // modify yaw angle using GPS ground course if more than 45 degrees away or if not previously aligned
-        yawErr = fabsf(newYaw - oldYaw);
-        if (((yawErr > 0.7854f) && (yawErr < 5.4978f)) || !yawAligned) {
+        // estimate the yaw error
+        yawErr = wrap_PI(newYaw - oldYaw);
+        // If the inertial course angle disagrees with the GPS by more than 45 degrees, we declare the compass as bad
+        badMag = (fabsf(yawErr) > 0.7854f);
+        // correct yaw angle using GPS ground course compass failed or if not previously aligned
+        if (badMag || !yawAligned) {
+            // correct the yaw angle
+            newYaw = oldYaw + yawErr;
             // calculate new filter quaternion states from Euler angles
-            newQuat.from_euler(roll, pitch, newYaw);
-            for (uint8_t i=0; i<=3; i++) states[i] = newQuat[i];
+            state.quat.from_euler(roll, pitch, newYaw);
             // the yaw angle is now aligned so update its status
             yawAligned =  true;
-            // set the velocity states
-            if (_fusionModeGPS < 2) {
-                states[4] = velNED[0];
-                states[5] = velNED[1];
-            }
-            // reinitialise the quaternion, velocity and position covariances
+            // reset the position and velocity states
+            ResetPosition();
+            ResetVelocity();
+            // reset the covariance for the quaternion, velocity and position states
             // zero the matrix entries
             zeroRows(P,0,9);
             zeroCols(P,0,9);
@@ -3231,6 +4238,10 @@ void NavEKF::alignYawGPS()
             P[8][8]   = P[7][7];
             P[9][9]   = sq(5.0f);
         }
+        // Update magnetic field states if the magnetometer is bad
+        if (badMag) {
+            calcQuatAndFieldStates(_ahrs->roll, _ahrs->pitch);
+        }
     }
 }
 
@@ -3242,12 +4253,12 @@ void NavEKF::alignYawGPS()
 // representative of typical launch wind
 void NavEKF::setWindVelStates()
 {
-    float gndSpd = sqrtf(sq(states[4]) + sq(states[5]));
+    float gndSpd = pythagorous2(state.velocity.x, state.velocity.y);
     if (gndSpd > 4.0f) {
         // set the wind states to be the reciprocal of the velocity and scale
         float scaleFactor = STARTUP_WIND_SPEED / gndSpd;
-        states[14] = - states[4] * scaleFactor;
-        states[15] = - states[5] * scaleFactor;
+        state.wind_vel.x = - state.velocity.x * scaleFactor;
+        state.wind_vel.y = - state.velocity.y * scaleFactor;
         // reinitialise the wind state covariances
         zeroRows(P,14,15);
         zeroCols(P,14,15);
@@ -3260,8 +4271,7 @@ void NavEKF::setWindVelStates()
 void NavEKF::getRotationBodyToNED(Matrix3f &mat) const
 {
     Vector3f trim = _ahrs->get_trim();
-    Quaternion q(states[0], states[1], states[2], states[3]);
-    q.rotation_matrix(mat);
+    state.quat.rotation_matrix(mat);
     mat.rotateXYinv(trim);
 }
 
@@ -3298,29 +4308,40 @@ void  NavEKF::getVariances(float &velVar, float &posVar, float &hgtVar, Vector3f
 // zero stored variables - this needs to be called before a full filter initialisation
 void NavEKF::ZeroVariables()
 {
+    // initialise time stamps
+    imuSampleTime_ms = hal.scheduler->millis();
+    lastHealthyMagTime_ms = imuSampleTime_ms;
+    TASmsecPrev = imuSampleTime_ms;
+    BETAmsecPrev = imuSampleTime_ms;
+    lastMagUpdate = imuSampleTime_ms;
+    lastHgtMeasTime = imuSampleTime_ms;
+    lastHgtTime_ms = imuSampleTime_ms;
+    lastAirspeedUpdate = imuSampleTime_ms;
+    velFailTime = imuSampleTime_ms;
+    posFailTime = imuSampleTime_ms;
+    hgtFailTime = imuSampleTime_ms;
+    lastStateStoreTime_ms = imuSampleTime_ms;
+    lastFixTime_ms = imuSampleTime_ms;
+    secondLastFixTime_ms = imuSampleTime_ms;
+    lastDecayTime_ms = imuSampleTime_ms;
+    timeAtLastAuxEKF_ms = imuSampleTime_ms;
+    flowMeaTime_ms = imuSampleTime_ms;
+    prevFlowFusionTime_ms = imuSampleTime_ms;
+    rngMeaTime_ms = imuSampleTime_ms;
+
+    gpsNoiseScaler = 1.0f;
     velTimeout = false;
     posTimeout = false;
     hgtTimeout = false;
-    filterDiverged = false;
-    lastStateStoreTime_ms = 0;
-    lastFixTime_ms = 0;
-    secondLastFixTime_ms = 0;
-    lastMagUpdate = 0;
-    lastAirspeedUpdate = 0;
-    velFailTime = 0;
-    posFailTime = 0;
-    hgtFailTime = 0;
+    magTimeout = false;
+    badMag = false;
+    firstArmComplete = false;
+    finalMagYawInit = false;
     storeIndex = 0;
-    TASmsecPrev = 0;
-    BETAmsecPrev = 0;
-    MAGmsecPrev = 0;
-    HGTmsecPrev = 0;
-    lastMagUpdate = 0;
-    lastAirspeedUpdate = 0;
-    lastHgtMeasTime = 0;
     dtIMU = 0;
     dt = 0;
     hgtMea = 0;
+    firstArmPosD = 0.0f;
     storeIndex = 0;
     lastGyroBias.zero();
 	prevDelAng.zero();
@@ -3339,6 +4360,27 @@ void NavEKF::ZeroVariables()
     memset(&processNoise[0], 0, sizeof(processNoise));
     memset(&storedStates[0], 0, sizeof(storedStates));
     memset(&statetimeStamp[0], 0, sizeof(statetimeStamp));
+    memset(&gpsIncrStateDelta[0], 0, sizeof(gpsIncrStateDelta));
+    memset(&hgtIncrStateDelta[0], 0, sizeof(hgtIncrStateDelta));
+    memset(&magIncrStateDelta[0], 0, sizeof(magIncrStateDelta));
+    memset(&flowIncrStateDelta[0], 0, sizeof(flowIncrStateDelta));
+    // optical flow variables
+    newDataFlow = false;
+    newDataRng  = false;
+    flowFusePerformed = false;
+    fuseOptFlowData = false;
+    memset(&Popt[0][0], 0, sizeof(Popt));
+    flowStates[0] = 1.0f;
+    flowStates[1] = 0.0f;
+    prevPosN = gpsPosNE.x;
+    prevPosE = gpsPosNE.y;
+    fuseRngData = false;
+    inhibitGndState = true;
+    flowGyroBias.x = 0;
+    flowGyroBias.y = 0;
+    velHoldMode = false;
+    heldVelNE.zero();
+    gpsInhibitMode = 0;
 }
 
 // return true if we should use the airspeed sensor
@@ -3350,12 +4392,30 @@ bool NavEKF::useAirspeed(void) const
     return _ahrs->get_airspeed()->use();
 }
 
+// return true if we should use the range finder sensor
+bool NavEKF::useRngFinder(void) const
+{
+    // TO-DO add code to set this based in setting of optical flow use parameter and presence of sensor
+    return true;
+}
+
+// return true if we should use the optical flow sensor
+bool NavEKF::useOptFlow(void) const
+{
+    // only use sensor if data is fresh
+    if (imuSampleTime_ms - flowMeaTime_ms < 200) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 // return true if the vehicle code has requested use of static mode
-// in static mode, position and height are constrained to zero, allowing an attitude
-// reference to be initialised and maintained when on the ground and without GPS lock
+// in static mode, zero postion measurements are fused, allowing an attitude
+// reference to be initialised and maintained without GPS lock
 bool NavEKF::static_mode_demanded(void) const
 {
-    return !_ahrs->get_armed() || !_ahrs->get_correct_centrifugal();
+    return !_ahrs->get_armed() || !_ahrs->get_correct_centrifugal() || gpsInhibitMode == 1;
 }
 
 // return true if we should use the compass
@@ -3364,18 +4424,23 @@ bool NavEKF::use_compass(void) const
     return _ahrs->get_compass() && _ahrs->get_compass()->use_for_yaw();
 }
 
-// decay GPS horizontal position offset to close to zero at a rate of 1 m/s
+// decay GPS horizontal position offset to close to zero at a rate of 1 m/s for copters and 3 m/s for planes
 // limit radius to a maximum of 100m
-// apply glitch offset to GPS measurements
 void NavEKF::decayGpsOffset()
 {
-    float lapsedTime = 0.001f*float(hal.scheduler->millis() - lastDecayTime_ms);
-    lastDecayTime_ms = hal.scheduler->millis();
+    float offsetDecaySpd;
+    if (assume_zero_sideslip()) {
+        offsetDecaySpd = 3.0f;
+    } else {
+        offsetDecaySpd = 1.0f;
+    }
+    float lapsedTime = 0.001f*float(imuSampleTime_ms - lastDecayTime_ms);
+    lastDecayTime_ms = imuSampleTime_ms;
     float offsetRadius = pythagorous2(gpsPosGlitchOffsetNE.x, gpsPosGlitchOffsetNE.y);
-    // decay radius if larger than velocity of 1.0 multiplied by lapsed time (plus a margin to prevent divide by zero)
-    if (offsetRadius > (lapsedTime + 0.1f)) {
+    // decay radius if larger than offset decay speed multiplied by lapsed time (plus a margin to prevent divide by zero)
+    if (offsetRadius > (offsetDecaySpd * lapsedTime + 0.1f)) {
         // calculate scale factor to be applied to both offset components
-        float scaleFactor = constrain_float((offsetRadius - lapsedTime), 0.0f, 100.0f) / offsetRadius;
+        float scaleFactor = constrain_float((offsetRadius - offsetDecaySpd * lapsedTime), 0.0f, 100.0f) / offsetRadius;
         gpsPosGlitchOffsetNE.x *= scaleFactor;
         gpsPosGlitchOffsetNE.y *= scaleFactor;
     }
@@ -3392,55 +4457,69 @@ bool NavEKF::assume_zero_sideslip(void) const
     return _ahrs->get_fly_forward() && _ahrs->get_vehicle_class() != AHRS_VEHICLE_GROUND;
 }
 
-// Check for filter divergence
-void NavEKF::checkDivergence()
-{
-    // If filter is diverging, then fail for 10 seconds
-    // delay checking to allow bias estimate to settle after reset
-    // filter divergence is detected by looking for rapid changes in gyro bias
-    Vector3f tempVec = state.gyro_bias - lastGyroBias;
-    float tempLength = tempVec.length();
-    if (tempLength != 0.0f) {
-        float temp = constrain_float((P[10][10] + P[11][11] + P[12][12]),1e-12f,1e-8f);
-        scaledDeltaGyrBiasLgth = (5e-7f / temp) * tempVec.length() / dtIMU;
-    }
-    bool divergenceDetected = (scaledDeltaGyrBiasLgth > 1.0f);
-    lastGyroBias = state.gyro_bias;
-    if (hal.scheduler->millis() - lastDivergeTime_ms > 10000) {
-        if (divergenceDetected) {
-            filterDiverged = true;
-            faultStatus.diverged = true;
-            lastDivergeTime_ms = hal.scheduler->millis();
-        } else {
-            filterDiverged = false;
-        }
-    }
-
-}
-
 /*
 return the filter fault status as a bitmasked integer
- 0 = filter divergence detected via gyro bias growth
- 1 = filter divergence detected by large covariances
+ 0 = quaternions are NaN
+ 1 = velocities are NaN
  2 = badly conditioned X magnetometer fusion
  3 = badly conditioned Y magnetometer fusion
- 4 = badly conditioned Z magnetometer fusion
- 5 = badly conditioned airspeed fusion
- 6 = badly conditioned synthetic sideslip fusion
- 7 = unassigned
-return normalised delta gyro bias length used for divergence test
+ 5 = badly conditioned Z magnetometer fusion
+ 6 = badly conditioned airspeed fusion
+ 7 = badly conditioned synthetic sideslip fusion
+ 7 = filter is not initialised
 */
-void  NavEKF::getFilterFaults(uint8_t &faults, float &deltaGyroBias) const
+void  NavEKF::getFilterFaults(uint8_t &faults) const
 {
-    faults = (faultStatus.diverged<<0 |
-              faultStatus.large_covarience<<1 |
+    faults = (state.quat.is_nan()<<0 |
+              state.velocity.is_nan()<<1 |
               faultStatus.bad_xmag<<2 |
               faultStatus.bad_ymag<<3 |
               faultStatus.bad_zmag<<4 |
               faultStatus.bad_airspeed<<5 |
-              faultStatus.bad_sideslip<<6);
-    deltaGyroBias = scaledDeltaGyrBiasLgth;
+              faultStatus.bad_sideslip<<6 |
+              !statesInitialised<<7);
 }
 
+/*
+return filter timeout status as a bitmasked integer
+ 0 = position measurement timeout
+ 1 = velocity measurement timeout
+ 2 = height measurement timeout
+ 3 = magnetometer measurement timeout
+ 5 = unassigned
+ 6 = unassigned
+ 7 = unassigned
+ 7 = unassigned
+*/
+void  NavEKF::getFilterTimeouts(uint8_t &timeouts) const
+{
+    timeouts = (posTimeout<<0 |
+                velTimeout<<1 |
+                hgtTimeout<<2 |
+                magTimeout<<3);
+}
+
+/*
+return filter function status as a bitmasked integer
+ 0 = attitude estimate valid
+ 1 = horizontal velocity estimate valid
+ 2 = vertical velocity estimate valid
+ 3 = relative horizontal position estimate valid
+ 4 = absolute horizontal position estimate valid
+ 5 = vertical position estimate valid
+ 6 = terrain height estimate valid
+ 7 = unassigned
+*/
+void  NavEKF::getFilterStatus(uint8_t &status) const
+{
+    // add code to set bits using private filter data here
+    status = (!state.quat.is_nan()<<0 |
+              !(velTimeout && posTimeout)<<1 |
+              !((velTimeout && hgtTimeout) || (hgtTimeout && _fusionModeGPS > 0))<<2 |
+              (gpsInhibitMode == 2 && useOptFlow())<<3 |
+              !posTimeout<<4 |
+              !hgtTimeout<<5 |
+              !inhibitGndState<<6);
+}
 
 #endif // HAL_CPU_CLASS

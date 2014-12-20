@@ -27,7 +27,7 @@ const AP_Param::GroupInfo AP_GPS::var_info[] PROGMEM = {
     // @Param: TYPE
     // @DisplayName: GPS type
     // @Description: GPS type
-    // @Values: 0:None,1:AUTO,2:uBlox,3:MTK,4:MTK19,5:NMEA,6:SiRF,7:HIL,8:SwiftNav
+    // @Values: 0:None,1:AUTO,2:uBlox,3:MTK,4:MTK19,5:NMEA,6:SiRF,7:HIL,8:SwiftNav,9:PX4EXPERIMENTAL
     AP_GROUPINFO("TYPE",    0, AP_GPS, _type[0], 1),
 
 #if GPS_MAX_INSTANCES > 1
@@ -35,7 +35,7 @@ const AP_Param::GroupInfo AP_GPS::var_info[] PROGMEM = {
     // @Param: TYPE2
     // @DisplayName: 2nd GPS type
     // @Description: GPS type of 2nd GPS
-    // @Values: 0:None,1:AUTO,2:uBlox,3:MTK,4:MTK19,5:NMEA,6:SiRF,7:HIL,8:SwiftNav
+    // @Values: 0:None,1:AUTO,2:uBlox,3:MTK,4:MTK19,5:NMEA,6:SiRF,7:HIL,8:SwiftNav,9:PX4EXPERIMENTAL
     AP_GROUPINFO("TYPE2",   1, AP_GPS, _type[1], 0),
 
 #endif
@@ -64,6 +64,21 @@ const AP_Param::GroupInfo AP_GPS::var_info[] PROGMEM = {
     AP_GROUPINFO("MIN_DGPS", 4, AP_GPS, _min_dgps, 100),
 #endif
 
+    // @Param: SBAS_MODE
+    // @DisplayName: SBAS Mode
+    // @Description: This sets the SBAS (satellite based augmentation system) mode if available on this GPS. If set to 2 then the SBAS mode is not changed in the GPS. Otherwise the GPS will be reconfigured to enable/disable SBAS. Disabling SBAS may be worthwhile in some parts of the world where an SBAS signal is available but the baseline is too long to be useful.
+    // @Values: 0:Disabled,1:Enabled,2:NoChange
+    // @User: Advanced
+    AP_GROUPINFO("SBAS_MODE", 5, AP_GPS, _sbas_mode, 2),
+
+    // @Param: MIN_ELEV
+    // @DisplayName: Minimum elevation
+    // @Description: This sets the minimum elevation of satellites above the horizon for them to be used for navigation. Setting this to -100 leaves the minimum elevation set to the GPS modules default.
+    // @Range: -100 90
+    // @Units: Degrees
+    // @User: Advanced
+    AP_GROUPINFO("MIN_ELEV", 6, AP_GPS, _min_elevation, -100),
+
     AP_GROUPEND
 };
 
@@ -72,8 +87,8 @@ void AP_GPS::init(DataFlash_Class *dataflash)
 {
     _DataFlash = dataflash;
     hal.uartB->begin(38400UL, 256, 16);
-#if GPS_MAX_INSTANCES > 1
     primary_instance = 0;
+#if GPS_MAX_INSTANCES > 1
     if (hal.uartE != NULL) {
         hal.uartE->begin(38400UL, 256, 16);        
     }
@@ -130,13 +145,22 @@ AP_GPS::detect_instance(uint8_t instance)
     AP_GPS_Backend *new_gps = NULL;
     AP_HAL::UARTDriver *port = instance==0?hal.uartB:hal.uartE;
     struct detect_state *dstate = &detect_state[instance];
+    uint32_t now = hal.scheduler->millis();
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_PX4
+    if (_type[instance] == GPS_TYPE_PX4) {
+        // check for explicitely chosen PX4 GPS beforehand
+        // it is not possible to autodetect it, nor does it require a real UART
+        hal.console->print_P(PSTR(" PX4 "));
+        new_gps = new AP_GPS_PX4(*this, state[instance], port);
+        goto found_gps;
+    }
+#endif
 
     if (port == NULL) {
         // UART not available
         return;
     }
-
-    uint32_t now = hal.scheduler->millis();
 
     state[instance].instance = instance;
     state[instance].status = NO_GPS;
@@ -212,6 +236,7 @@ AP_GPS::detect_instance(uint8_t instance)
 #endif
 	}
 
+found_gps:
 	if (new_gps != NULL) {
         state[instance].status = NO_FIX;
         drivers[instance] = new_gps;
@@ -330,13 +355,9 @@ AP_GPS::update_instance(uint8_t instance)
 void
 AP_GPS::update(void)
 {
-
     for (uint8_t i=0; i<GPS_MAX_INSTANCES; i++) {
         update_instance(i);
     }
-
-    // update notify with gps status. We always base this on the first GPS
-    AP_Notify::flags.gps_status = state[0].status;
 
 #if GPS_MAX_INSTANCES > 1
     // work out which GPS is the primary, and how many sensors we have
@@ -369,6 +390,8 @@ AP_GPS::update(void)
 #else
     num_instances = 1;
 #endif // GPS_MAX_INSTANCES
+	// update notify with gps status. We always base this on the primary_instance
+    AP_Notify::flags.gps_status = state[primary_instance].status;
 }
 
 /*
@@ -376,7 +399,7 @@ AP_GPS::update(void)
  */
 void 
 AP_GPS::setHIL(uint8_t instance, GPS_Status _status, uint64_t time_epoch_ms, 
-               Location &_location, Vector3f &_velocity, uint8_t _num_sats, 
+               const Location &_location, const Vector3f &_velocity, uint8_t _num_sats, 
                uint16_t hdop, bool _have_vertical_velocity)
 {
     if (instance >= GPS_MAX_INSTANCES) {
@@ -388,14 +411,16 @@ AP_GPS::setHIL(uint8_t instance, GPS_Status _status, uint64_t time_epoch_ms,
     istate.location = _location;
     istate.location.options = 0;
     istate.velocity = _velocity;
+    istate.have_vertical_velocity = true;
     istate.ground_speed = pythagorous2(istate.velocity.x, istate.velocity.y);
     istate.ground_course_cd = degrees(atan2f(istate.velocity.y, istate.velocity.x)) * 100UL;
     istate.hdop = hdop;
     istate.num_sats = _num_sats;
     istate.have_vertical_velocity = _have_vertical_velocity;
     istate.last_gps_time_ms = tnow;
-    istate.time_week     = time_epoch_ms / (86400*7*(uint64_t)1000);
-    istate.time_week_ms  = time_epoch_ms - istate.time_week*(86400*7*(uint64_t)1000);
+    uint64_t gps_time_ms = time_epoch_ms - (17000ULL*86400ULL + 52*10*7000ULL*86400ULL - 15000ULL);
+    istate.time_week     = gps_time_ms / (86400*7*(uint64_t)1000);
+    istate.time_week_ms  = gps_time_ms - istate.time_week*(86400*7*(uint64_t)1000);
     timing[instance].last_message_time_ms = tnow;
     timing[instance].last_fix_time_ms = tnow;
     _type[instance].set(GPS_TYPE_HIL);

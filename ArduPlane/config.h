@@ -77,12 +77,14 @@
  #ifndef CAMERA
  # define CAMERA DISABLED
  #endif
+ #ifndef FRSKY_TELEM_ENABLED
+ # define FRSKY_TELEM_ENABLED DISABLED
+ #endif
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
 // sensor types
 
-#define CONFIG_INS_TYPE HAL_INS_DEFAULT
 #define CONFIG_BARO     HAL_BARO_DEFAULT
 #define CONFIG_COMPASS  HAL_COMPASS_DEFAULT
 
@@ -100,8 +102,6 @@
 #if HIL_MODE != HIL_MODE_DISABLED       // we are in HIL mode
  #undef CONFIG_BARO
  #define CONFIG_BARO HAL_BARO_HIL
- #undef CONFIG_INS_TYPE
- #define CONFIG_INS_TYPE HAL_INS_HIL
  #undef  CONFIG_COMPASS
  #define CONFIG_COMPASS HAL_COMPASS_HIL
 #endif
@@ -123,6 +123,29 @@
  # define SERIAL2_BAUD                    57600
 #endif
 
+//////////////////////////////////////////////////////////////////////////////
+// FrSky telemetry support
+//
+
+#ifndef FRSKY_TELEM_ENABLED
+#if CONFIG_HAL_BOARD == HAL_BOARD_APM1 || CONFIG_HAL_BOARD == HAL_BOARD_APM2
+ # define FRSKY_TELEM_ENABLED DISABLED
+#else
+ # define FRSKY_TELEM_ENABLED ENABLED
+#endif
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
+// Optical flow sensor support
+//
+
+#ifndef OPTFLOW
+#if CONFIG_HAL_BOARD == HAL_BOARD_PX4
+ # define OPTFLOW ENABLED
+#else
+ # define OPTFLOW DISABLED
+#endif
+#endif
 
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
@@ -414,7 +437,7 @@
 // Navigation defaults
 //
 #ifndef WP_RADIUS_DEFAULT
- # define WP_RADIUS_DEFAULT              30
+ # define WP_RADIUS_DEFAULT              90
 #endif
 
 #ifndef LOITER_RADIUS_DEFAULT
@@ -434,6 +457,10 @@
  # define INVERTED_FLIGHT_PWM 1750
 #endif
 
+#ifndef PX4IO_OVERRIDE_PWM
+ # define PX4IO_OVERRIDE_PWM 1750
+#endif
+
 //////////////////////////////////////////////////////////////////////////////
 // Developer Items
 //
@@ -442,9 +469,14 @@
  # define SCALING_SPEED          15.0
 #endif
 
-// use this to completely disable the CLI
+// use this to completely disable the CLI. We now default the CLI to
+// off on smaller boards.
 #ifndef CLI_ENABLED
+#if HAL_CPU_CLASS > HAL_CPU_CLASS_16
  # define CLI_ENABLED ENABLED
+#else
+ # define CLI_ENABLED DISABLE
+#endif
 #endif
 
 // use this to disable geo-fencing
@@ -473,8 +505,18 @@
 
 // OBC Failsafe enable
 #ifndef OBC_FAILSAFE
+#if HAL_CPU_CLASS >= HAL_CPU_CLASS_75
+ # define OBC_FAILSAFE ENABLED
+#else
  # define OBC_FAILSAFE DISABLED
 #endif
+#endif
+
+#if OBC_FAILSAFE == ENABLED && HAL_CPU_CLASS < HAL_CPU_CLASS_75
+#define CLI_ENABLED DISABLED
+#endif
+
+
 
 #ifndef SERIAL_BUFSIZE
  # define SERIAL_BUFSIZE 512

@@ -21,39 +21,40 @@
 #include <AP_Baro.h>
 #include <GCS_MAVLink.h>
 #include <AP_Mission.h>
+#include <StorageManager.h>
+#include <AP_Terrain.h>
 #include <Filter.h>
 #include <SITL.h>
 #include <AP_Buffer.h>
 #include <AP_Notify.h>
 #include <AP_Vehicle.h>
 #include <DataFlash.h>
+#include <AP_NavEKF.h>
+#include <AP_Rally.h>
+#include <AP_Scheduler.h>
 
 #include <AP_HAL_AVR.h>
 #include <AP_HAL_AVR_SITL.h>
 #include <AP_HAL_Empty.h>
+#include <AP_HAL_PX4.h>
 
 const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 
 // INS and Baro declaration
-#if CONFIG_HAL_BOARD == HAL_BOARD_APM2
-AP_InertialSensor_MPU6000 ins;
-AP_Baro_MS5611 baro(&AP_Baro_MS5611::spi);
-#elif CONFIG_HAL_BOARD == HAL_BOARD_APM1
+AP_InertialSensor ins;
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_APM1
 AP_ADC_ADS7844 adc;
-AP_InertialSensor_Oilpan ins( &adc );
-AP_Baro_BMP085 baro;
-#else
-AP_InertialSensor_HIL ins;
 #endif
 
 AP_Compass_HMC5843 compass;
 
 AP_GPS gps;
+AP_Baro_HIL baro;
 
 // choose which AHRS system to use
 AP_AHRS_DCM  ahrs(ins, baro, gps);
 
-AP_Baro_HIL barometer;
 
 
 #define HIGH 1

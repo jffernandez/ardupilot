@@ -17,6 +17,7 @@
 #include <AP_Common.h>
 #include <AP_Progmem.h>
 #include <AP_Param.h>
+#include <StorageManager.h>
 #include <AP_Math.h>
 #include <AP_HAL.h>
 #include <AP_HAL_AVR.h>
@@ -39,10 +40,14 @@
 #include <SITL.h>
 #include <AP_Compass.h>
 #include <AP_Baro.h>
+#include <AP_Baro_Glitch.h>
 #include <AP_InertialSensor.h>
 #include <AP_InertialNav.h>
 #include <AP_NavEKF.h>
 #include <AP_Mission.h>
+#include <AP_Rally.h>
+#include <AP_BattMonitor.h>
+#include <AP_Terrain.h>
 #include <Parameters.h>
 #include <stdio.h>
 #include <getopt.h>
@@ -58,19 +63,19 @@
 
 const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 
-AP_Param param_loader(var_info, 4096);
-
 static Parameters g;
 
-static AP_InertialSensor_HIL ins;
+static AP_InertialSensor ins;
 static AP_Baro_HIL barometer;
 static AP_GPS gps;
 static AP_Compass_HIL compass;
 static AP_AHRS_NavEKF ahrs(ins, barometer, gps);
 static GPS_Glitch gps_glitch(gps);
-static AP_InertialNav inertial_nav(ahrs, barometer, gps_glitch);
+static Baro_Glitch baro_glitch(barometer);
+static AP_InertialNav inertial_nav(ahrs, barometer, gps_glitch, baro_glitch);
 static AP_Vehicle::FixedWing aparm;
 static AP_Airspeed airspeed(aparm);
+static DataFlash_File dataflash("logs");
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
 SITL sitl;
@@ -78,7 +83,7 @@ SITL sitl;
 
 static const NavEKF &NavEKF = ahrs.get_NavEKF();
 
-static LogReader LogReader(ahrs, ins, barometer, compass, gps, airspeed);
+static LogReader LogReader(ahrs, ins, barometer, compass, gps, airspeed, dataflash);
 
 static FILE *plotf;
 static FILE *plotf2;
@@ -99,6 +104,12 @@ static struct {
     float value;
 } user_parameters[100];
 
+static const struct LogStructure log_structure[] PROGMEM = {
+    LOG_COMMON_STRUCTURES
+};
+
+// setup the var_info table
+AP_Param param_loader(var_info);
 
 static void usage(void)
 {
@@ -180,6 +191,9 @@ void setup()
         exit(1);
     }
 
+    dataflash.Init(log_structure, sizeof(log_structure)/sizeof(log_structure[0]));
+    dataflash.StartNewLog();
+
     LogReader.wait_type(LOG_GPS_MSG);
     LogReader.wait_type(LOG_IMU_MSG);
     LogReader.wait_type(LOG_GPS_MSG);
@@ -201,6 +215,8 @@ void setup()
     barometer.read();
     compass.init();
     inertial_nav.init();
+    ins.set_hil_mode();
+
     switch (update_rate) {
     case 0:
     case 50:
@@ -224,7 +240,7 @@ void setup()
     ekf3f = fopen("EKF3.dat", "w");
     ekf4f = fopen("EKF4.dat", "w");
 
-    fprintf(plotf, "time SIM.Roll SIM.Pitch SIM.Yaw BAR.Alt FLIGHT.Roll FLIGHT.Pitch FLIGHT.Yaw FLIGHT.dN FLIGHT.dE FLIGHT.Alt DCM.Roll DCM.Pitch DCM.Yaw EKF.Roll EKF.Pitch EKF.Yaw INAV.dN INAV.dE INAV.Alt EKF.dN EKF.dE EKF.Alt\n");
+    fprintf(plotf, "time SIM.Roll SIM.Pitch SIM.Yaw BAR.Alt FLIGHT.Roll FLIGHT.Pitch FLIGHT.Yaw FLIGHT.dN FLIGHT.dE FLIGHT.Alt AHR2.Roll AHR2.Pitch AHR2.Yaw DCM.Roll DCM.Pitch DCM.Yaw EKF.Roll EKF.Pitch EKF.Yaw INAV.dN INAV.dE INAV.Alt EKF.dN EKF.dE EKF.Alt\n");
     fprintf(plotf2, "time E1 E2 E3 VN VE VD PN PE PD GX GY GZ WN WE MN ME MD MX MY MZ E1ref E2ref E3ref\n");
     fprintf(ekf1f, "timestamp TimeMS Roll Pitch Yaw VN VE VD PN PE PD GX GY GZ\n");
     fprintf(ekf2f, "timestamp TimeMS AX AY AZ VWN VWE MN ME MD MX MY MZ\n");
@@ -296,6 +312,8 @@ static void read_sensors(uint8_t type)
                 inertial_nav.update(ins.get_delta_time());
             }
             hal.scheduler->stop_clock(hal.scheduler->micros() + (i+1)*update_delta_usec);
+            dataflash.Log_Write_EKF(ahrs);
+            dataflash.Log_Write_AHRS2(ahrs);
             ins.set_gyro(0, ins.get_gyro());
             ins.set_accel(0, ins.get_accel());
         }
@@ -342,7 +360,9 @@ void loop()
             Vector3f velNED;
             Vector3f posNED;
             Vector3f gyroBias;
-            Vector3f accelBias;
+            float accelWeighting;
+            float accelZBias1;
+            float accelZBias2;
             Vector3f windVel;
             Vector3f magNED;
             Vector3f magXYZ;
@@ -359,7 +379,6 @@ void loop()
             float tasVar;
             Vector2f offset;
             uint8_t faultStatus;
-            float deltaGyroBias;
 
             const Matrix3f &dcm_matrix = ((AP_AHRS_DCM)ahrs).get_dcm_matrix();
             dcm_matrix.to_euler(&DCM_attitude.x, &DCM_attitude.y, &DCM_attitude.z);
@@ -367,19 +386,20 @@ void loop()
             NavEKF.getVelNED(velNED);
             NavEKF.getPosNED(posNED);
             NavEKF.getGyroBias(gyroBias);
-            NavEKF.getAccelBias(accelBias);
+            NavEKF.getIMU1Weighting(accelWeighting);
+            NavEKF.getAccelZBias(accelZBias1, accelZBias2);
             NavEKF.getWind(windVel);
             NavEKF.getMagNED(magNED);
             NavEKF.getMagXYZ(magXYZ);
             NavEKF.getInnovations(velInnov, posInnov, magInnov, tasInnov);
             NavEKF.getVariances(velVar, posVar, hgtVar, magVar, tasVar, offset);
-            NavEKF.getFilterFaults(faultStatus,deltaGyroBias);
+            NavEKF.getFilterFaults(faultStatus);
             NavEKF.getPosNED(ekf_relpos);
             Vector3f inav_pos = inertial_nav.get_position() * 0.01f;
             float temp = degrees(ekf_euler.z);
 
             if (temp < 0.0f) temp = temp + 360.0f;
-            fprintf(plotf, "%.3f %.1f %.1f %.1f %.2f %.1f %.1f %.1f %.2f %.2f %.2f %.1f %.1f %.1f %.1f %.1f %.1f %.2f %.2f %.2f %.2f %.2f %.2f\n",
+            fprintf(plotf, "%.3f %.1f %.1f %.1f %.2f %.1f %.1f %.1f %.2f %.2f %.2f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.2f %.2f %.2f %.2f %.2f %.2f\n",
                     hal.scheduler->millis() * 0.001f,
                     LogReader.get_sim_attitude().x,
                     LogReader.get_sim_attitude().y,
@@ -387,10 +407,13 @@ void loop()
                     barometer.get_altitude(),
                     LogReader.get_attitude().x,
                     LogReader.get_attitude().y,
-                    LogReader.get_attitude().z,
+                    wrap_180_cd(LogReader.get_attitude().z*100)*0.01f,
                     LogReader.get_inavpos().x,
                     LogReader.get_inavpos().y,
                     LogReader.get_relalt(),
+                    LogReader.get_ahr2_attitude().x,
+                    LogReader.get_ahr2_attitude().y,
+                    wrap_180_cd(LogReader.get_ahr2_attitude().z*100)*0.01f,
                     degrees(DCM_attitude.x),
                     degrees(DCM_attitude.y),
                     degrees(DCM_attitude.z),
@@ -439,12 +462,12 @@ void loop()
             float       posN  = (float)(posNED.x); // metres North
             float       posE  = (float)(posNED.y); // metres East
             float       posD  = (float)(posNED.z); // metres Down
-            int16_t     gyrX  = (int16_t)(6000*degrees(gyroBias.x)); // centi-deg/min
-            int16_t     gyrY  = (int16_t)(6000*degrees(gyroBias.y)); // centi-deg/min
-            int16_t     gyrZ  = (int16_t)(6000*degrees(gyroBias.z)); // centi-deg/min
+            float       gyrX  = (float)(6000*degrees(gyroBias.x)); // centi-deg/min
+            float       gyrY  = (float)(6000*degrees(gyroBias.y)); // centi-deg/min
+            float       gyrZ  = (float)(6000*degrees(gyroBias.z)); // centi-deg/min
 
             // print EKF1 data packet
-            fprintf(ekf1f, "%.3f %u %d %d %u %.2f %.2f %.2f %.2f %.2f %.2f %d %d %d\n",
+            fprintf(ekf1f, "%.3f %u %d %d %u %.2f %.2f %.2f %.2f %.2f %.2f %.0f %.0f %.0f\n",
                     hal.scheduler->millis() * 0.001f,
                     hal.scheduler->millis(),
                     roll, 
@@ -461,9 +484,9 @@ void loop()
                     gyrZ);
 
             // define messages for EKF2 data packet
-            int8_t  accX  = (int8_t)(100*accelBias.x);
-            int8_t  accY  = (int8_t)(100*accelBias.y);
-            int8_t  accZ  = (int8_t)(100*accelBias.z);
+            int8_t  accWeight  = (int8_t)(100*accelWeighting);
+            int8_t  acc1  = (int8_t)(100*accelZBias1);
+            int8_t  acc2  = (int8_t)(100*accelZBias2);
             int16_t windN = (int16_t)(100*windVel.x);
             int16_t windE = (int16_t)(100*windVel.y);
             int16_t magN  = (int16_t)(magNED.x);
@@ -477,9 +500,9 @@ void loop()
             fprintf(ekf2f, "%.3f %d %d %d %d %d %d %d %d %d %d %d %d\n",
                     hal.scheduler->millis() * 0.001f,
                     hal.scheduler->millis(),
-                    accX, 
-                    accY, 
-                    accZ, 
+                    accWeight, 
+                    acc1, 
+                    acc2, 
                     windN, 
                     windE, 
                     magN, 
@@ -526,7 +549,6 @@ void loop()
             int16_t sqrtvarVT = (int16_t)(constrain_float(100*tasVar,INT16_MIN,INT16_MAX));
             int16_t offsetNorth = (int8_t)(constrain_float(offset.x,INT16_MIN,INT16_MAX));
             int16_t offsetEast = (int8_t)(constrain_float(offset.y,INT16_MIN,INT16_MAX));
-            uint8_t divergeRate = (uint8_t)(100*deltaGyroBias);
 
             // print EKF4 data packet
             fprintf(ekf4f, "%.3f %d %d %d %d %d %d %d %d %d %d %d %d\n",
@@ -541,8 +563,7 @@ void loop()
                     sqrtvarVT,
                     offsetNorth,
                     offsetEast,
-                    faultStatus,
-                    divergeRate);
+                    faultStatus);
         }
     }
 }

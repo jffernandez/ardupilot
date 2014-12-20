@@ -38,7 +38,7 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] PROGMEM = {
 	// @Param: P
 	// @DisplayName: Proportional Gain
 	// @Description: This is the gain from pitch angle to elevator. This gain works the same way as PTCH2SRV_P in the old PID controller and can be set to the same value.
-	// @Range: 0.1 2.0
+	// @Range: 0.1 3.0
 	// @Increment: 0.1
 	// @User: User
 	AP_GROUPINFO("P",        1, AP_PitchController, gains.P,          0.4f),
@@ -57,7 +57,7 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] PROGMEM = {
 	// @Range: 0 0.5
 	// @Increment: 0.05
 	// @User: User
-	AP_GROUPINFO("I",        3, AP_PitchController, gains.I,        0.0f),
+	AP_GROUPINFO("I",        3, AP_PitchController, gains.I,        0.04f),
 
 	// @Param: RMAX_UP
 	// @DisplayName: Pitch up max rate

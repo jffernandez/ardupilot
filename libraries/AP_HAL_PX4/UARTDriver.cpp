@@ -150,6 +150,8 @@ void PX4UARTDriver::begin(uint32_t b, uint16_t rxS, uint16_t txS)
         }
         _initialised = true;
     }
+    _uart_owner_pid = getpid();
+
 }
 
 void PX4UARTDriver::set_flow_control(enum flow_control flow_control)
@@ -275,6 +277,9 @@ int16_t PX4UARTDriver::txspace()
 int16_t PX4UARTDriver::read() 
 { 
 	uint8_t c;
+    if (_uart_owner_pid != getpid()){
+        return -1;
+    }
     if (!_initialised) {
         try_initialise();
         return -1;
@@ -295,12 +300,11 @@ int16_t PX4UARTDriver::read()
  */
 size_t PX4UARTDriver::write(uint8_t c) 
 { 
-    if (!_initialised) {
-        try_initialise();
+    if (_uart_owner_pid != getpid()){
         return 0;
     }
-    if (hal.scheduler->in_timerprocess()) {
-        // not allowed from timers
+    if (!_initialised) {
+        try_initialise();
         return 0;
     }
     uint16_t _head;
@@ -321,14 +325,13 @@ size_t PX4UARTDriver::write(uint8_t c)
  */
 size_t PX4UARTDriver::write(const uint8_t *buffer, size_t size)
 {
+    if (_uart_owner_pid != getpid()){
+        return 0;
+    }
 	if (!_initialised) {
         try_initialise();
 		return 0;
 	}
-    if (hal.scheduler->in_timerprocess()) {
-        // not allowed from timers
-        return 0;
-    }
 
     if (!_nonblocking_writes) {
         /*
@@ -391,7 +394,7 @@ int PX4UARTDriver::_write_fd(const uint8_t *buf, uint16_t n)
             _last_write_time != 0 &&
             _total_written != 0 &&
             _os_write_buffer_size == _total_written &&
-            hrt_elapsed_time(&_last_write_time) > 500*1000UL) {
+            (hal.scheduler->micros64() - _last_write_time) > 500*1000UL) {
             // it doesn't look like hw flow control is working
             ::printf("disabling flow control on %s _total_written=%u\n", 
                      _devpath, (unsigned)_total_written);
@@ -407,17 +410,17 @@ int PX4UARTDriver::_write_fd(const uint8_t *buf, uint16_t n)
 
     if (ret > 0) {
         BUF_ADVANCEHEAD(_writebuf, ret);
-        _last_write_time = hrt_absolute_time();
+        _last_write_time = hal.scheduler->micros64();
         _total_written += ret;
         return ret;
     }
 
-    if (hrt_absolute_time() - _last_write_time > 2000 &&
+    if (hal.scheduler->micros64() - _last_write_time > 2000 &&
         _flow_control == FLOW_CONTROL_DISABLE) {
 #if 0
         // this trick is disabled for now, as it sometimes blocks on
         // re-opening the ttyACM0 port, which would cause a crash
-        if (hrt_absolute_time() - _last_write_time > 2000000) {
+        if (hal.scheduler->micros64() - _last_write_time > 2000000) {
             // we haven't done a successful write for 2 seconds - try
             // reopening the port        
             _initialised = false;
@@ -430,11 +433,11 @@ int PX4UARTDriver::_write_fd(const uint8_t *buf, uint16_t n)
                 return n;
             }
             
-            _last_write_time = hrt_absolute_time();
+            _last_write_time = hal.scheduler->micros64();
             _initialised = true;
         }
 #else
-        _last_write_time = hrt_absolute_time();
+        _last_write_time = hal.scheduler->micros64();
 #endif
         // we haven't done a successful write for 2ms, which means the 
         // port is running at less than 500 bytes/sec. Start
@@ -495,15 +498,15 @@ void PX4UARTDriver::_timer_tick(void)
     uint16_t _tail;
     n = BUF_AVAILABLE(_writebuf);
     if (n > 0) {
+        uint16_t n1 = _writebuf_size - _writebuf_head;
         perf_begin(_perf_uart);
-        if (_tail > _writebuf_head) {
+        if (n1 >= n) {
             // do as a single write
             _write_fd(&_writebuf[_writebuf_head], n);
         } else {
             // split into two writes
-            uint16_t n1 = _writebuf_size - _writebuf_head;
             int ret = _write_fd(&_writebuf[_writebuf_head], n1);
-            if (ret == n1 && n != n1) {
+            if (ret == n1 && n > n1) {
                 _write_fd(&_writebuf[_writebuf_head], n - n1);                
             }
         }
@@ -514,16 +517,16 @@ void PX4UARTDriver::_timer_tick(void)
     uint16_t _head;
     n = BUF_SPACE(_readbuf);
     if (n > 0) {
+        uint16_t n1 = _readbuf_size - _readbuf_tail;
         perf_begin(_perf_uart);
-        if (_readbuf_tail < _head) {
+        if (n1 >= n) {
             // one read will do
             assert(_readbuf_tail+n <= _readbuf_size);
             _read_fd(&_readbuf[_readbuf_tail], n);
         } else {
-            uint16_t n1 = _readbuf_size - _readbuf_tail;
             assert(_readbuf_tail+n1 <= _readbuf_size);
             int ret = _read_fd(&_readbuf[_readbuf_tail], n1);
-            if (ret == n1 && n != n1) {
+            if (ret == n1 && n > n1) {
                 assert(_readbuf_tail+(n-n1) <= _readbuf_size);
                 _read_fd(&_readbuf[_readbuf_tail], n - n1);                
             }

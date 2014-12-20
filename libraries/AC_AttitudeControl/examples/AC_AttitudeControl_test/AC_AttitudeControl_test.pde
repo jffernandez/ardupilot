@@ -16,6 +16,7 @@
 #include <AP_ADC.h>             // ArduPilot Mega Analog to Digital Converter Library
 #include <AP_ADC_AnalogSource.h>
 #include <AP_Baro.h>            // ArduPilot Mega Barometer Library
+#include <AP_Baro_Glitch.h>     // Baro glitch protection library
 #include <Filter.h>
 #include <AP_Compass.h>         // ArduPilot Mega Magnetometer Library
 #include <AP_Declination.h>
@@ -28,6 +29,8 @@
 #include <AP_InertialNav.h>     // Inertial Navigation library
 #include <GCS_MAVLink.h>
 #include <AP_Mission.h>
+#include <StorageManager.h>
+#include <AP_Terrain.h>
 #include <AP_Notify.h>
 #include <AP_Vehicle.h>
 #include <DataFlash.h>
@@ -42,27 +45,24 @@ const AP_HAL::HAL& hal = AP_HAL_BOARD_DRIVER;
 static AP_Vehicle::MultiCopter aparm;
 
 // INS and Baro declaration
+AP_InertialSensor ins;
 #if CONFIG_HAL_BOARD == HAL_BOARD_APM2
-
-AP_InertialSensor_MPU6000 ins;
 AP_Baro_MS5611 baro(&AP_Baro_MS5611::spi);
-
 #else
-
-AP_ADC_ADS7844 adc;
-AP_InertialSensor_Oilpan ins(&adc);
+AP_ADC_ADS7844 apm1_adc;
 AP_Baro_BMP085 baro;
 #endif
 
 // GPS declaration
 AP_GPS gps;
 GPS_Glitch gps_glitch(gps);
+Baro_Glitch baro_glitch(baro);
 
 AP_Compass_HMC5843 compass;
 AP_AHRS_DCM ahrs(ins, baro, gps);
 
 // Inertial Nav declaration
-AP_InertialNav inertial_nav(ahrs, baro, gps_glitch);
+AP_InertialNav inertial_nav(ahrs, baro, gps_glitch, baro_glitch);
 
 // fake PIDs
 AC_P   p_angle_roll, p_angle_pitch, p_angle_yaw;

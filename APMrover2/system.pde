@@ -138,7 +138,12 @@ static void init_ardupilot()
     gcs[1].setup_uart(hal.uartC, map_baudrate(g.serial1_baud), 128, 128);
 
 #if MAVLINK_COMM_NUM_BUFFERS > 2
-    gcs[2].setup_uart(hal.uartD, map_baudrate(g.serial2_baud), 128, 128);
+    if (g.serial2_protocol == SERIAL2_FRSKY_DPORT || 
+        g.serial2_protocol == SERIAL2_FRSKY_SPORT) {
+        frsky_telemetry.init(hal.uartD, g.serial2_protocol);
+    } else {
+        gcs[2].setup_uart(hal.uartD, map_baudrate(g.serial2_baud), 128, 128);
+    }
 #endif
 
 	mavlink_system.sysid = g.sysid_this_mav;
@@ -183,10 +188,6 @@ static void init_ardupilot()
 
 	// Do GPS init
 	gps.init(&DataFlash);
-
-	//mavlink_system.sysid = MAV_SYSTEM_ID;				// Using g.sysid_this_mav
-	mavlink_system.compid = 1;	//MAV_COMP_ID_IMU;   // We do not check for comp id
-	mavlink_system.type = MAV_TYPE_GROUND_ROVER;
 
     rc_override_active = hal.rcin->set_overrides(rc_override, 8);
 
@@ -257,6 +258,7 @@ static void startup_ground(void)
     mission.init();
 
     hal.uartA->set_blocking_writes(false);
+    hal.uartB->set_blocking_writes(false);
     hal.uartC->set_blocking_writes(false);
 
 	gcs_send_text_P(SEVERITY_LOW,PSTR("\n\n Ready to drive."));
@@ -317,6 +319,24 @@ static void set_mode(enum mode mode)
 	if (should_log(MASK_LOG_MODE)) {
 		Log_Write_Mode();
     }
+}
+
+/*
+  set_mode() wrapper for MAVLink SET_MODE
+ */
+static bool mavlink_set_mode(uint8_t mode)
+{
+    switch (mode) {
+    case MANUAL:
+    case HOLD:
+    case LEARNING:
+    case STEERING:
+    case AUTO:
+    case RTL:
+        set_mode((enum mode)mode);
+        return true;
+    }
+    return false;
 }
 
 /*
@@ -510,4 +530,15 @@ static bool should_log(uint32_t mask)
         in_mavlink_delay = false;
     }
     return ret;
+}
+
+/*
+  send FrSky telemetry. Should be called at 5Hz by scheduler
+ */
+static void telemetry_send(void)
+{
+#if FRSKY_TELEM_ENABLED == ENABLED
+    frsky_telemetry.send_frames((uint8_t)control_mode, 
+                                (AP_Frsky_Telem::FrSkyProtocol)g.serial2_protocol.get());
+#endif
 }
